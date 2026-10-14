@@ -7,7 +7,7 @@ html {
 }
 
 body {
-  background-color: #0a0d12;
+  background-color: #050505;
   font-family: "Inter", system-ui, sans-serif;
 }
 
@@ -25,17 +25,17 @@ body {
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0a0d12;
+  background: #050505;
 }
 ::-webkit-scrollbar-thumb {
-  background-color: #2a3850;
+  background-color: #404040;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #3a4a66;
+  background-color: #595959;
 }
 
 *:focus-visible {
-  outline: 2px solid #f5a524;
+  outline: 2px solid #ffffff;
   outline-offset: 2px;
 }

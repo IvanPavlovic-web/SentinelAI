@@ -16,11 +16,14 @@ export default function AuditLogs() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold">Audit Logs</h1>
+      <div>
+        <p className="text-[11px] uppercase tracking-widest2 text-ops-accent font-medium mb-1">Admin</p>
+        <h1 className="font-display text-2xl font-semibold">Audit Logs</h1>
+      </div>
 
       <div className="bg-ops-panel border border-ops-border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-slate-900 text-slate-400 text-left">
+          <thead className="bg-ops-panel2 text-slate-400 text-left">
             <tr>
               <th className="px-4 py-3">Action</th>
               <th className="px-4 py-3">Resource</th>
@@ -31,8 +34,8 @@ export default function AuditLogs() {
           </thead>
           <tbody>
             {data?.items.map((log) => (
-              <tr key={log.id} className="border-t border-ops-border hover:bg-slate-900/40">
-                <td className="px-4 py-3 text-amber-400">{log.action}</td>
+              <tr key={log.id} className="border-t border-ops-border hover:bg-white/[0.02]">
+                <td className="px-4 py-3 text-ops-accent">{log.action}</td>
                 <td className="px-4 py-3">
                   {log.resource_type ?? "-"} {log.resource_id ? `#${log.resource_id}` : ""}
                 </td>
@@ -49,7 +52,7 @@ export default function AuditLogs() {
         <button
           disabled={page <= 1}
           onClick={() => setPage((p) => Math.max(1, p - 1))}
-          className="rounded bg-slate-800 px-3 py-1 disabled:opacity-40"
+          className="rounded bg-ops-borderStrong px-3 py-1 disabled:opacity-40"
         >
           Previous
         </button>
@@ -59,7 +62,7 @@ export default function AuditLogs() {
         <button
           disabled={page >= totalPages}
           onClick={() => setPage((p) => p + 1)}
-          className="rounded bg-slate-800 px-3 py-1 disabled:opacity-40"
+          className="rounded bg-ops-borderStrong px-3 py-1 disabled:opacity-40"
         >
           Next
         </button>

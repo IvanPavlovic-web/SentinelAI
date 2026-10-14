@@ -36,7 +36,10 @@ export default function VideoDetail() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold">{video?.original_filename ?? "Video"}</h1>
+      <div>
+        <p className="text-[11px] uppercase tracking-widest2 text-ops-accent font-medium mb-1">Video Detail</p>
+        <h1 className="font-display text-2xl font-semibold truncate">{video?.original_filename ?? "Video"}</h1>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="md:col-span-2 bg-ops-panel border border-ops-border rounded-lg p-4">
@@ -53,13 +56,13 @@ export default function VideoDetail() {
           </div>
           <button
             onClick={() => reprocessMutation.mutate()}
-            className="mt-4 rounded bg-amber-500 text-slate-950 font-semibold text-sm px-4 py-2 hover:bg-amber-400"
+            className="mt-4 rounded bg-ops-accent text-ops-bg font-semibold text-sm px-4 py-2 hover:bg-ops-accentDim"
           >
             Reprocess Video
           </button>
           {jobUpdate && (
             <p className="mt-2 text-sm text-slate-400">
-              Job status: <span className="text-amber-400">{jobUpdate.status}</span> (
+              Job status: <span className="text-ops-accent">{jobUpdate.status}</span> (
               {jobUpdate.progress_percent.toFixed(0)}%)
             </p>
           )}
@@ -72,7 +75,7 @@ export default function VideoDetail() {
             {incidents?.map((incident) => (
               <li key={incident.id} className="border-b border-ops-border pb-2">
                 <p className="text-slate-300">{incident.summary}</p>
-                <p className="text-xs text-red-400">Risk: {incident.star_risk_score.toFixed(1)}</p>
+                <p className="text-xs text-status-critical font-semibold">Risk: {incident.star_risk_score.toFixed(1)}</p>
               </li>
             ))}
           </ul>

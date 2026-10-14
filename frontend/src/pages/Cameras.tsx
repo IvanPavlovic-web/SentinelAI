@@ -57,7 +57,10 @@ export default function Cameras() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold">Cameras & Zones</h1>
+      <div>
+        <p className="text-[11px] uppercase tracking-widest2 text-ops-accent font-medium mb-1">Configuration</p>
+        <h1 className="font-display text-2xl font-semibold">Cameras &amp; Zones</h1>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-ops-panel border border-ops-border rounded-lg p-4">
@@ -68,7 +71,7 @@ export default function Cameras() {
                 key={camera.id}
                 onClick={() => setSelectedCameraId(camera.id)}
                 className={`w-full text-left px-3 py-2 rounded text-sm ${
-                  selectedCameraId === camera.id ? "bg-amber-500/10 text-amber-400" : "hover:bg-slate-900/40"
+                  selectedCameraId === camera.id ? "bg-white/10 text-ops-accent" : "hover:bg-white/[0.03]"
                 }`}
               >
                 {camera.name} <span className="text-slate-500">({camera.location})</span>
@@ -80,18 +83,18 @@ export default function Cameras() {
               placeholder="Camera name"
               value={newCameraName}
               onChange={(e) => setNewCameraName(e.target.value)}
-              className="w-full rounded bg-slate-900 border border-ops-border px-3 py-2 text-sm"
+              className="w-full rounded bg-ops-panel2 border border-ops-border px-3 py-2 text-sm"
             />
             <input
               placeholder="Location"
               value={newCameraLocation}
               onChange={(e) => setNewCameraLocation(e.target.value)}
-              className="w-full rounded bg-slate-900 border border-ops-border px-3 py-2 text-sm"
+              className="w-full rounded bg-ops-panel2 border border-ops-border px-3 py-2 text-sm"
             />
             <button
               onClick={() => createCamera.mutate()}
               disabled={!newCameraName}
-              className="rounded bg-amber-500 text-slate-950 font-semibold text-sm px-4 py-2 hover:bg-amber-400 disabled:opacity-50"
+              className="rounded bg-ops-accent text-ops-bg font-semibold text-sm px-4 py-2 hover:bg-ops-accentDim disabled:opacity-50"
             >
               Add Camera
             </button>
@@ -109,7 +112,7 @@ export default function Cameras() {
                 {zones?.map((zone) => (
                   <li key={zone.id} className="border-b border-ops-border pb-2">
                     <span className="text-slate-200">{zone.name}</span>{" "}
-                    <span className="text-amber-400 uppercase text-xs">{zone.severity}</span>
+                    <span className="text-ops-accent uppercase text-xs">{zone.severity}</span>
                   </li>
                 ))}
               </ul>
@@ -118,12 +121,12 @@ export default function Cameras() {
                   placeholder="Zone name"
                   value={zoneName}
                   onChange={(e) => setZoneName(e.target.value)}
-                  className="w-full rounded bg-slate-900 border border-ops-border px-3 py-2 text-sm"
+                  className="w-full rounded bg-ops-panel2 border border-ops-border px-3 py-2 text-sm"
                 />
                 <select
                   value={zoneSeverity}
                   onChange={(e) => setZoneSeverity(e.target.value as ZoneSeverity)}
-                  className="w-full rounded bg-slate-900 border border-ops-border px-3 py-2 text-sm"
+                  className="w-full rounded bg-ops-panel2 border border-ops-border px-3 py-2 text-sm"
                 >
                   <option value="low">Low</option>
                   <option value="medium">Medium</option>
@@ -134,19 +137,19 @@ export default function Cameras() {
                   placeholder="Polygon points (x,y x,y x,y ... normalized 0-1)"
                   value={zonePoints}
                   onChange={(e) => setZonePoints(e.target.value)}
-                  className="w-full rounded bg-slate-900 border border-ops-border px-3 py-2 text-sm"
+                  className="w-full rounded bg-ops-panel2 border border-ops-border px-3 py-2 text-sm"
                 />
                 <input
                   type="number"
                   placeholder="Minimum dwell seconds"
                   value={minDwell}
                   onChange={(e) => setMinDwell(Number(e.target.value))}
-                  className="w-full rounded bg-slate-900 border border-ops-border px-3 py-2 text-sm"
+                  className="w-full rounded bg-ops-panel2 border border-ops-border px-3 py-2 text-sm"
                 />
                 <button
                   onClick={() => createZone.mutate()}
                   disabled={!zoneName}
-                  className="rounded bg-amber-500 text-slate-950 font-semibold text-sm px-4 py-2 hover:bg-amber-400 disabled:opacity-50"
+                  className="rounded bg-ops-accent text-ops-bg font-semibold text-sm px-4 py-2 hover:bg-ops-accentDim disabled:opacity-50"
                 >
                   Add Zone
                 </button>

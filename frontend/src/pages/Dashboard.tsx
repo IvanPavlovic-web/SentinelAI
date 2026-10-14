@@ -55,15 +55,15 @@ export default function Dashboard() {
           <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400 mb-4">Incidents by Priority</h2>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={priorityData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e2838" vertical={false} />
-              <XAxis dataKey="priority" stroke="#64748b" fontSize={11} tickLine={false} axisLine={{ stroke: "#1e2838" }} />
-              <YAxis stroke="#64748b" fontSize={11} allowDecimals={false} tickLine={false} axisLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+              <XAxis dataKey="priority" stroke="#737373" fontSize={11} tickLine={false} axisLine={{ stroke: "#262626" }} />
+              <YAxis stroke="#737373" fontSize={11} allowDecimals={false} tickLine={false} axisLine={false} />
               <Tooltip
-                cursor={{ fill: "rgba(245,165,36,0.06)" }}
-                contentStyle={{ background: "#111722", border: "1px solid #1e2838", borderRadius: 8, fontSize: 12 }}
-                labelStyle={{ color: "#e2e8f0" }}
+                cursor={{ fill: "rgba(255,255,255,0.06)" }}
+                contentStyle={{ background: "#111111", border: "1px solid #262626", borderRadius: 8, fontSize: 12 }}
+                labelStyle={{ color: "#e5e5e5" }}
               />
-              <Bar dataKey="count" fill="#f5a524" radius={[4, 4, 0, 0]} maxBarSize={48} />
+              <Bar dataKey="count" fill="#ffffff" radius={[4, 4, 0, 0]} maxBarSize={48} />
             </BarChart>
           </ResponsiveContainer>
         </div>

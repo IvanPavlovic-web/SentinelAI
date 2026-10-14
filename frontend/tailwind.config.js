@@ -9,21 +9,24 @@ export default {
         mono: ["JetBrains Mono", "ui-monospace", "monospace"],
       },
       colors: {
+        // Strict black/white/gray palette — no hue anywhere in the UI.
+        // Hierarchy and urgency are carried by brightness, weight and
+        // borders instead of color.
         ops: {
-          bg: "#0a0d12",
-          panel: "#111722",
-          panel2: "#0d131b",
-          border: "#1e2838",
-          borderStrong: "#2a3850",
-          accent: "#f5a524",
-          accentDim: "#c17f12",
+          bg: "#050505",
+          panel: "#111111",
+          panel2: "#0a0a0a",
+          border: "#262626",
+          borderStrong: "#404040",
+          accent: "#ffffff",
+          accentDim: "#cccccc",
         },
         status: {
-          critical: "#ef4444",
-          high: "#f5a524",
-          medium: "#eab308",
-          low: "#64748b",
-          ok: "#22c55e",
+          critical: "#ffffff",
+          high: "#d4d4d4",
+          medium: "#a3a3a3",
+          low: "#6b7280",
+          ok: "#e5e5e5",
         },
       },
       letterSpacing: {
