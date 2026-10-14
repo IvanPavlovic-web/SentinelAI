@@ -6,7 +6,6 @@ import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import VideoLibrary from "./pages/VideoLibrary";
 import VideoDetail from "./pages/VideoDetail";
-import Cameras from "./pages/Cameras";
 import Incidents from "./pages/Incidents";
 import Performance from "./pages/Performance";
 import AuditLogs from "./pages/AuditLogs";
@@ -22,7 +21,6 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/videos" element={<VideoLibrary />} />
           <Route path="/videos/:id" element={<VideoDetail />} />
-          <Route path="/cameras" element={<Cameras />} />
           <Route path="/incidents" element={<Incidents />} />
           <Route path="/performance" element={<Performance />} />
           <Route path="/audit-logs" element={<AuditLogs />} />

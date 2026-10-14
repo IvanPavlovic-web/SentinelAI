@@ -63,6 +63,19 @@ export default function VideoLibrary() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (videoId: number) => apiClient.delete(`/api/videos/${videoId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["videos"] });
+    },
+  });
+
+  const handleDelete = (video: VideoSource) => {
+    if (window.confirm(`Delete "${video.original_filename}"? This cannot be undone.`)) {
+      deleteMutation.mutate(video.id);
+    }
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -154,10 +167,17 @@ export default function VideoLibrary() {
                   {video.width && video.height ? `${video.width}x${video.height}` : "-"}
                 </td>
                 <td className="px-4 py-3 text-slate-400">{new Date(video.created_at).toLocaleString()}</td>
-                <td className="px-4 py-3 text-right">
+                <td className="px-4 py-3 text-right whitespace-nowrap">
                   <Link to={`/videos/${video.id}`} className="text-ops-accent hover:underline">
                     View
                   </Link>
+                  <button
+                    onClick={() => handleDelete(video)}
+                    disabled={deleteMutation.isPending}
+                    className="ml-3 text-status-critical hover:underline disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
                 </td>
               </tr>
             ))}

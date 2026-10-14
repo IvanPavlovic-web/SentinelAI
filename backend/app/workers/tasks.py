@@ -190,6 +190,69 @@ def _process_chunk(
     return results
 
 
+def _render_annotated_video(
+    source_path: str,
+    output_path: Path,
+    annotations_by_frame: dict[int, list[dict]],
+    fps: float,
+    width: int,
+    height: int,
+    hold_frames: int,
+) -> bool:
+    """Re-renders the source video with detection boxes, track IDs,
+    confidence and STAR-Risk burned in — this is what the Video Detail
+    preview shows so a person can see exactly what the AI found, not just
+    a status percentage. Boxes persist for `hold_frames` frames after their
+    last sampled detection (= FRAME_SAMPLE_RATE) so playback doesn't flicker
+    between the frames that were actually sampled for inference. Returns
+    False on any failure (e.g. no video codec available in this
+    environment) so the caller can skip the annotated preview without
+    failing the whole processing job over a cosmetic feature."""
+    import cv2  # local import: this runs in the main task process/thread
+
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cap = cv2.VideoCapture(source_path)
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(str(output_path), fourcc, fps if fps > 0 else 25.0, (width, height))
+        if not cap.isOpened() or not writer.isOpened():
+            cap.release()
+            writer.release()
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+
+    active: dict[int, tuple[dict, int]] = {}  # track_id -> (box, expires_at_frame)
+    frame_idx = 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+
+            for box in annotations_by_frame.get(frame_idx, []):
+                active[box["track_id"]] = (box, frame_idx + hold_frames)
+            for track_id in [tid for tid, (_, expiry) in active.items() if expiry < frame_idx]:
+                del active[track_id]
+
+            for box, _ in active.values():
+                x1, y1, x2, y2 = int(box["x1"]), int(box["y1"]), int(box["x2"]), int(box["y2"])
+                label = f"{box['object_class']} #{box['track_id']} {box['confidence'] * 100:.0f}% risk:{box['risk']:.0f}"
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+                text_y = max(y1 - 8, 14)
+                # Black outline then white fill so the label reads on any background.
+                cv2.putText(frame, label, (x1 + 1, text_y + 1), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
+                cv2.putText(frame, label, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+            writer.write(frame)
+            frame_idx += 1
+    finally:
+        cap.release()
+        writer.release()
+
+    return frame_idx > 0
+
+
 def _after_hours(ts: datetime) -> bool:
     return ts.hour >= 22 or ts.hour < 6
 
@@ -312,6 +375,8 @@ def process_video_task(self, job_id: int) -> dict:
 
         risk_history_by_track: dict[int, list[float]] = {}
         first_seen_by_track: dict[int, float] = {}
+        # Collected for _render_annotated_video, keyed by frame number.
+        annotations_by_frame: dict[int, list[dict]] = {}
 
         # Group detections by frame/timestamp for the tracker's frame-by-frame update.
         by_timestamp: dict[float, list[RawDetection]] = {}
@@ -366,9 +431,20 @@ def process_video_task(self, job_id: int) -> dict:
                 )
                 risk_history_by_track[track_id].append(risk)
 
+                frame_number = int(ts * fps)
+                annotations_by_frame.setdefault(frame_number, []).append(
+                    {
+                        "x1": det.x1, "y1": det.y1, "x2": det.x2, "y2": det.y2,
+                        "object_class": det.object_class,
+                        "track_id": track_id,
+                        "confidence": det.confidence,
+                        "risk": risk,
+                    }
+                )
+
                 observation = ObjectObservation(
                     tracked_object_id=track_db_ids[track_id],
-                    frame_number=int(ts * fps),
+                    frame_number=frame_number,
                     timestamp_seconds=ts,
                     bbox_x1=det.x1, bbox_y1=det.y1, bbox_x2=det.x2, bbox_y2=det.y2,
                     confidence=det.confidence,
@@ -445,6 +521,24 @@ def process_video_task(self, job_id: int) -> dict:
                             except Exception as exc:  # noqa: BLE001
                                 logger.warning("Could not write evidence frame: %s", exc)
                             break
+
+        job.progress_percent = 95.0
+        db.commit()
+
+        annotated_path = Path(settings.UPLOAD_DIR) / "annotated" / f"job_{job.id}.mp4"
+        hold_frames = max(int(settings.FRAME_SAMPLE_RATE), 1)
+        try:
+            rendered = _render_annotated_video(
+                video.file_path, annotated_path, annotations_by_frame, fps, width, height, hold_frames
+            )
+        except Exception as exc:  # noqa: BLE001 - annotated preview is best-effort, never fails the job
+            logger.warning("Annotated preview rendering raised for job %s: %s", job.id, exc)
+            rendered = False
+        if rendered:
+            job.annotated_path = str(annotated_path)
+            db.commit()
+        else:
+            logger.warning("Annotated preview not produced for job %s (no codec available?)", job.id)
 
         elapsed = time.time() - start_time
         latencies = np.array(latencies_ms) if latencies_ms else np.array([0.0])

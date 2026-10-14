@@ -11,13 +11,10 @@ from app.core.logging import get_logger, setup_logging
 from app.routers import (
     audit_logs,
     auth,
-    cameras,
     dashboard,
     incidents,
     jobs,
-    rules,
     videos,
-    zones,
 )
 from app.websocket.routes import router as websocket_router
 
@@ -36,7 +33,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="SentinelAI: Edge Video Intelligence & Incident Detection Platform",
-    description="API for camera/video/zone/rule management, incident detection, and dashboards.",
+    description="API for video upload/analysis, incident detection, and dashboards.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -50,10 +47,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
-app.include_router(cameras.router)
 app.include_router(videos.router)
-app.include_router(zones.router)
-app.include_router(rules.router)
 app.include_router(jobs.router)
 app.include_router(incidents.router)
 app.include_router(dashboard.router)

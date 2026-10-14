@@ -36,8 +36,7 @@ export default function Dashboard() {
         <h1 className="font-display text-2xl font-semibold">Dashboard</h1>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-        <StatTile label="Active Cameras" value={summary?.active_cameras ?? "–"} />
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3.5">
         <StatTile label="Total Videos" value={summary?.total_videos ?? "–"} />
         <StatTile label="Open Incidents" value={summary?.open_incidents ?? "–"} accent="red" />
         <StatTile label="Incidents (24h)" value={summary?.incidents_last_24h ?? "–"} accent="amber" />

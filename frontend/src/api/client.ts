@@ -7,6 +7,16 @@ export const apiClient = axios.create({
   baseURL: API_BASE_URL,
 });
 
+/** A <video> element can't attach an Authorization header, so streaming
+ * endpoints also accept the access token as a `?token=` query param (see
+ * get_current_user_for_streaming on the backend). Use this to build any
+ * <video src>. */
+export function authenticatedStreamUrl(path: string): string {
+  const token = localStorage.getItem("access_token") ?? "";
+  const separator = path.includes("?") ? "&" : "?";
+  return `${API_BASE_URL}${path}${separator}token=${encodeURIComponent(token)}`;
+}
+
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem("access_token");
   if (token) {

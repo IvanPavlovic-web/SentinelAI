@@ -3,12 +3,21 @@
 **CS50P Final Project** by Ivan Pavlović
 **CS50 demo video:** _[PLACEHOLDER — add your CS50 submission video URL here]_
 
-A self-hostable video-security platform that ingests uploaded footage,
-detects and tracks people/vehicles across frames, evaluates configurable
-security zones and rules, and raises **explainable, scored incidents** —
-instead of a wall of raw bounding boxes. It is an AI inference and
-video-processing pipeline, not just an object detector: upload → detect →
-track → evaluate → alert, end to end, running entirely on CPU.
+A self-hostable video-analysis platform: upload a video, and it detects and
+tracks every person/vehicle in it, shows you exactly what it found with an
+annotated preview (detection boxes, track IDs, confidence, risk score burned
+into the footage), and raises **explainable, scored incidents** when a
+tracked object's behavior crosses a configured risk threshold — instead of
+a wall of raw bounding boxes. It is an AI inference and video-processing
+pipeline, not just an object detector: upload → detect → track → preview →
+alert, end to end, running entirely on CPU.
+
+The product surface is deliberately narrow: **upload a video, watch it get
+analyzed in real time, see exactly what the AI saw, delete it when you're
+done.** Camera/zone/rule management exists underneath (zones feed the
+STAR-Risk scoring formula and the seed script creates one demo zone+rule),
+but there's no UI for managing them — this is a video analysis tool, not a
+camera-fleet management console.
 
 ---
 
@@ -57,22 +66,28 @@ GPU requirement, that answers concrete security questions:
 
 ## Features
 
-- **Upload-based ingestion** with asynchronous background processing (Celery).
+- **Upload-based ingestion** with asynchronous background processing (Celery);
+  uploading a video takes you straight into a live analysis view.
 - **Multi-object tracking** via a custom, lightweight centroid/IoU tracker —
   no heavy third-party re-identification model to download or maintain.
-- **Polygon security zones** with per-zone severity, and **rules** scoped to
-  a zone (object class, after-hours-only, risk threshold, consecutive-hit
-  requirement).
+- **Annotated AI preview** — the source video is re-rendered with detection
+  boxes, track IDs, confidence and STAR-Risk burned in frame by frame, so
+  the preview shows exactly what the AI found, not just a status bar.
+- **Real-time detection reporting** over WebSockets: running object-class
+  counts stream in while the job is still processing, not only once it
+  completes.
 - **STAR-Risk** — an original, explainable 0–100 risk-scoring algorithm that
   fuses zone severity, dwell time, motion anomaly, time-of-day, and
   detection-confidence persistence, with exponential smoothing and
   hysteresis against noisy duplicate alerts.
 - Automatic incident creation with evidence frames, a resolve/dismiss
   workflow with analyst notes, and a full audit trail.
-- A role-based dashboard (admin/analyst/viewer): video library, camera/zone
-  management, incidents table with filters, performance charts, and an
-  admin-only audit log — styled as a dark security-operations console.
-- **Live updates** over WebSockets for job progress and incoming incidents.
+- Delete a video (and everything derived from it — jobs, tracks,
+  observations, incidents, evidence, the annotated preview file) in one
+  action.
+- A role-based dashboard (admin/analyst/viewer): video library, incidents
+  table with filters, performance charts, and an admin-only audit log —
+  styled as a dark security-operations console.
 - Full JWT authentication (short-lived access tokens + rotating, revocable
   refresh tokens) with role-based access control.
 
@@ -269,23 +284,18 @@ POST   /api/auth/refresh
 POST   /api/auth/logout
 GET    /api/auth/me
 
-GET/POST     /api/cameras
-PATCH/DELETE /api/cameras/{id}
-
 GET    /api/videos
 POST   /api/videos/upload
 GET    /api/videos/{id}
+GET    /api/videos/{id}/stream      (original upload, HTTP Range-capable, for <video src>)
 POST   /api/videos/{id}/process
-
-GET/POST     /api/zones
-PATCH/DELETE /api/zones/{id}
-GET/POST     /api/rules
-PATCH        /api/rules/{id}
+DELETE /api/videos/{id}             (also removes its jobs/tracks/incidents/evidence/annotated files)
 
 GET    /api/jobs/{id}
 GET    /api/jobs/{id}/metrics
-GET    /api/jobs/{id}/detections    (live, works mid-processing — see below)
-GET    /api/videos/{id}/jobs        (every job ever run for a video, newest first)
+GET    /api/jobs/{id}/detections       (live, works mid-processing — see below)
+GET    /api/jobs/{id}/annotated-video  (detection-overlay preview, HTTP Range-capable)
+GET    /api/videos/{id}/jobs           (every job ever run for a video, newest first)
 
 GET    /api/incidents          (paginated; filters: status, priority, date, camera, object_class)
 GET    /api/incidents/{id}
@@ -308,13 +318,29 @@ A black/white/gray "security operations" theme (no accent hue — hierarchy
 comes from brightness and weight), built with React, Vite, TypeScript and
 Tailwind. Pages: Login / Register, Dashboard (stat tiles, incidents-by-priority
 chart, recent incidents, queue status), Video Library (upload + processing
-status), Video Detail (live analysis status, detections timeline, linked
-incidents), Cameras & Zones (polygon zones via normalized coordinates with
-a preview), Incidents (filterable table with a resolve/dismiss workflow),
-Performance (latency/FPS/queue/CPU/RAM charts via Recharts), and an
-admin-only Audit Logs page. Data is fetched with TanStack Query, navigation
-uses React Router, and job progress/incidents arrive live through a
-WebSocket hook.
+status + delete), Video Detail (live annotated preview, detections panel,
+linked incidents, delete), Incidents (filterable table with a resolve/dismiss
+workflow), Performance (latency/FPS/queue/CPU/RAM charts via Recharts), and
+an admin-only Audit Logs page. Data is fetched with TanStack Query,
+navigation uses React Router, and job progress/incidents arrive live through
+a WebSocket hook. Camera/zone/rule management has no UI by design (see
+"Problem it solves" above) — the product surface is upload → analyze →
+preview → delete.
+
+### Live annotated preview
+
+A plain `<video>` element can't attach an `Authorization` header, so
+`GET /api/videos/{id}/stream` and `GET /api/jobs/{id}/annotated-video`
+accept the access token as a `?token=` query parameter as well (see
+`get_current_user_for_streaming`); the frontend's `authenticatedStreamUrl()`
+helper builds these URLs. Both endpoints implement real HTTP Range support
+(206 Partial Content) so the browser can seek/scrub rather than downloading
+the whole file up front. The Video Detail page shows the raw upload while a
+job is pending/processing, then automatically switches to the annotated
+preview — detection boxes, track ID, confidence and STAR-Risk score drawn
+directly onto the footage — once rendering finishes (`_render_annotated_video`
+in `tasks.py`; boxes persist for `FRAME_SAMPLE_RATE` frames past their last
+sampled detection so playback doesn't flicker between sampled frames).
 
 ### Real-time detection reporting
 
@@ -521,16 +547,18 @@ curl -X PATCH localhost:8000/api/incidents/1/status -H "Authorization: Bearer <t
 - WebSocket progress uses per-connection database polling rather than
   Redis pub/sub — simple and reliable for a single backend replica, but not
   horizontally scalable as-is.
-- Video playback on the Video Detail page is currently a placeholder;
-  serving static files/signed URLs from `uploads/` would be needed for real
-  in-browser playback.
-- Detection/tracking always runs on upload, but **incidents only fire for
-  videos linked to a camera that has an active zone and rule** — if you
-  upload a video without selecting a camera (the default from the Video
-  Library upload button), you'll see real detections and tracks on the
-  Video Detail page but zero incidents, which is expected rather than a
-  bug. Attach a camera with a configured zone under Cameras & Zones and
-  reprocess to also get incident scoring.
+- Detection/tracking always runs on upload, but since there's no
+  camera/zone management UI, uploaded videos aren't linked to a camera —
+  so zone-based incident scoring (the `Z` term in STAR-Risk) stays at 0 and
+  incidents will rarely fire from the dashboard-uploaded path. Detections,
+  tracking, confidence and motion-anomaly-based risk still work fully; only
+  the zone-severity component of STAR-Risk needs the (currently
+  API-only, unexposed in the UI) camera/zone/rule tables to be populated —
+  see `backend/app/seed.py` for how the demo data does this.
+- Annotated-preview rendering re-reads every frame of the source video
+  once tracking finishes, so its cost scales with total video length, not
+  just the sampled frames used for detection; for very long footage this
+  adds meaningfully to total job time.
 
 ## Future improvements
 

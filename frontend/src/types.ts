@@ -55,6 +55,7 @@ export interface ProcessingJob {
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
+  has_annotated_video: boolean;
 }
 
 export type ZoneSeverity = "low" | "medium" | "high" | "critical";

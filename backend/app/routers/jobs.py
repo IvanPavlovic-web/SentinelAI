@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_current_user_for_streaming
+from app.core.streaming import stream_video_file
 from app.db.base import get_db
 from app.schemas.video import ProcessingJobRead
 from app.services import job_service
@@ -23,6 +24,22 @@ def get_job_detections(job_id: int, db: Session = Depends(get_db), current_user=
     zone/rule triggered an incident. Safe to poll while a job is still
     processing; rows are written incrementally."""
     return job_service.get_job_detections(db, job_id)
+
+
+@router.get("/{job_id}/annotated-video")
+def get_annotated_video(
+    job_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_for_streaming),
+):
+    """The source video re-rendered with detection boxes/track IDs/risk
+    scores burned in — exactly what the AI found, frame by frame. Only
+    available once the job's tracking pass has finished."""
+    job = job_service.get_job(db, job_id)
+    if not job.annotated_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Annotated preview not available yet")
+    return stream_video_file(job.annotated_path, request)
 
 
 @router.get("/{job_id}/metrics")

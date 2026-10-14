@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -79,6 +79,33 @@ def get_current_user(token: str | None = Depends(oauth2_scheme), db: Session = D
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
     payload = decode_token(token)
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+
+    user_id = payload.get("sub")
+    user = db.get(User, int(user_id)) if user_id else None
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    return user
+
+
+def get_current_user_for_streaming(
+    token: str | None = Depends(oauth2_scheme),
+    token_qs: str | None = Query(default=None, alias="token"),
+    db: Session = Depends(get_db),
+):
+    """Same as get_current_user, but also accepts the access token as a
+    `?token=` query parameter. A plain <video src="..."> element cannot
+    attach an Authorization header, so video/annotated-video streaming
+    endpoints authenticate this way instead while every other route keeps
+    using the standard bearer-token dependency."""
+    from app.models.user import User  # local import to avoid circular imports
+
+    actual_token = token or token_qs
+    if actual_token is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    payload = decode_token(actual_token)
     if payload.get("type") != "access":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
 

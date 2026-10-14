@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import get_current_user, require_roles
+from app.core.security import get_current_user, get_current_user_for_streaming, require_roles
+from app.core.streaming import stream_video_file
 from app.db.base import get_db
 from app.schemas.video import ProcessingJobRead, VideoSourceRead, VideoUploadResponse
 from app.services import video_service
@@ -82,3 +83,26 @@ def reprocess_video(
     except Exception:  # noqa: BLE001
         pass
     return job
+
+
+@router.delete("/{video_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_video(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "analyst")),
+):
+    video_service.delete_video(db, video_id)
+    log_action(db, current_user.id, "video_delete", "video_source", video_id)
+
+
+@router.get("/{video_id}/stream")
+def stream_video(
+    video_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_for_streaming),
+):
+    """Streams the original uploaded file with HTTP Range support, so a
+    <video> element can play and scrub it directly."""
+    video = video_service.get_video(db, video_id)
+    return stream_video_file(video.file_path, request)

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "../api/client";
+import { apiClient, authenticatedStreamUrl } from "../api/client";
 import type { Incident, JobDetectionsSummary, JobProgressMessage, ProcessingJob, VideoSource } from "../types";
 import { useWebSocket } from "../hooks/useWebSocket";
 
@@ -15,6 +15,7 @@ const statusLabel: Record<string, string> = {
 export default function VideoDetail() {
   const { id } = useParams();
   const videoId = Number(id);
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const { data: video } = useQuery({
@@ -23,9 +24,9 @@ export default function VideoDetail() {
     enabled: !!videoId,
   });
 
-  // Every job ever run for this video, newest first — this is what lets the
-  // page find and subscribe to live progress right after upload, without
-  // requiring the user to click "Reprocess" first.
+  // Every job ever run for this video, newest first — lets the page find
+  // and subscribe to live progress right after upload, without requiring
+  // the user to click "Reprocess" first.
   const { data: jobs } = useQuery({
     queryKey: ["video-jobs", videoId],
     queryFn: async () => (await apiClient.get<ProcessingJob[]>(`/api/videos/${videoId}/jobs`)).data,
@@ -43,6 +44,14 @@ export default function VideoDetail() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async () => apiClient.delete(`/api/videos/${videoId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["videos"] });
+      navigate("/videos");
+    },
+  });
+
   const activeJob = jobs?.[0];
   const isLive = activeJob?.status === "pending" || activeJob?.status === "processing";
 
@@ -51,7 +60,7 @@ export default function VideoDetail() {
   );
 
   // Once a job finishes, pull the full per-track breakdown (confidence,
-  // observation count, risk score) — the WebSocket only carries the
+  // observation count, risk score). The WebSocket only carries the
   // lightweight running class-count totals while processing.
   const { data: detections } = useQuery({
     queryKey: ["job-detections", activeJob?.id],
@@ -68,9 +77,6 @@ export default function VideoDetail() {
     refetchInterval: isLive ? 5000 : false,
   });
 
-  // Refresh the video row itself once processing completes, so
-  // duration/fps/resolution (filled in by the worker) show up without a
-  // manual reload.
   useEffect(() => {
     if (activeJob?.status === "completed" || activeJob?.status === "failed") {
       queryClient.invalidateQueries({ queryKey: ["video", videoId] });
@@ -83,21 +89,70 @@ export default function VideoDetail() {
   const liveTotal = jobUpdate?.total_tracked_objects ?? detections?.total_tracked_objects ?? 0;
   const classEntries = Object.entries(liveCounts).sort((a, b) => b[1] - a[1]);
 
+  // Prefer the annotated preview (detection boxes/track IDs burned in) once
+  // it exists for the latest completed job; otherwise fall back to the raw
+  // upload so the preview is never empty, even before the first analysis
+  // finishes.
+  const hasAnnotated = activeJob?.status === "completed" && activeJob.has_annotated_video;
+  const previewSrc = videoId
+    ? hasAnnotated
+      ? authenticatedStreamUrl(`/api/jobs/${activeJob!.id}/annotated-video`)
+      : authenticatedStreamUrl(`/api/videos/${videoId}/stream`)
+    : undefined;
+
+  const handleDelete = () => {
+    if (window.confirm(`Delete "${video?.original_filename ?? "this video"}"? This cannot be undone.`)) {
+      deleteMutation.mutate();
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-[11px] uppercase tracking-widest2 text-ops-accent font-medium mb-1">Video Detail</p>
-        <h1 className="font-display text-2xl font-semibold truncate">{video?.original_filename ?? "Video"}</h1>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[11px] uppercase tracking-widest2 text-ops-accent font-medium mb-1">Video Detail</p>
+          <h1 className="font-display text-2xl font-semibold truncate">{video?.original_filename ?? "Video"}</h1>
+        </div>
+        <button
+          onClick={handleDelete}
+          disabled={deleteMutation.isPending}
+          className="shrink-0 rounded-md border border-status-critical/40 text-status-critical text-sm font-medium px-3 py-1.5 hover:bg-status-critical/10 disabled:opacity-50"
+        >
+          {deleteMutation.isPending ? "Deleting…" : "Delete Video"}
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="md:col-span-2 space-y-4">
           <div className="bg-ops-panel border border-ops-border rounded-lg p-4">
-            <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400 mb-3">Preview</h2>
-            <div className="aspect-video bg-black rounded flex items-center justify-center text-slate-600 text-sm">
-              Video playback is served from backend uploads/ (configure a static mount or signed URL in production).
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400">Preview</h2>
+              {hasAnnotated && (
+                <span className="text-[10px] font-mono uppercase tracking-wide text-ops-accent border border-ops-accent/40 rounded px-1.5 py-0.5">
+                  AI detection overlay
+                </span>
+              )}
             </div>
-            <div className="mt-4 flex items-center gap-4 text-sm text-slate-400 tabular">
+            {previewSrc ? (
+              <video
+                key={previewSrc}
+                controls
+                className="w-full rounded bg-black aspect-video"
+                src={previewSrc}
+              />
+            ) : (
+              <div className="aspect-video bg-black rounded flex items-center justify-center text-slate-600 text-sm">
+                No video available.
+              </div>
+            )}
+            {!hasAnnotated && (
+              <p className="mt-2 text-xs text-slate-500">
+                {isLive
+                  ? "Showing the original upload while analysis runs — this will switch to the detection overlay once processing completes."
+                  : "Showing the original upload. Run analysis to see detection boxes burned in."}
+              </p>
+            )}
+            <div className="mt-3 flex items-center gap-4 text-sm text-slate-400 tabular">
               <span>Duration: {video?.duration_seconds?.toFixed(0) ?? "-"}s</span>
               <span>FPS: {video?.fps?.toFixed(1) ?? "-"}</span>
               <span>
@@ -212,13 +267,6 @@ export default function VideoDetail() {
               </li>
             ))}
           </ul>
-          {!video?.camera_id && (
-            <p className="text-xs text-slate-500 mt-3 pt-3 border-t border-ops-border">
-              This video isn't linked to a camera, so zone/rule evaluation (and incidents) is skipped — detection and
-              tracking above still run regardless. Attach a camera with a zone under Cameras &amp; Zones to also get
-              incident scoring on reprocess.
-            </p>
-          )}
         </div>
       </div>
     </div>

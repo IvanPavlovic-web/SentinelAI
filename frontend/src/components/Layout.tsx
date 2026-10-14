@@ -4,7 +4,6 @@ import { useAuth } from "../context/AuthContext";
 const navItems = [
   { to: "/", label: "Dashboard" },
   { to: "/videos", label: "Video Library" },
-  { to: "/cameras", label: "Cameras & Zones" },
   { to: "/incidents", label: "Incidents" },
   { to: "/performance", label: "Performance" },
   { to: "/audit-logs", label: "Audit Logs", adminOnly: true },

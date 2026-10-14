@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.camera import JobStatus, ProcessingJob, VideoSource
+from app.models.incident import Incident
 
 
 def _validate_extension(filename: str) -> str:
@@ -105,3 +106,31 @@ def create_reprocess_job(db: Session, video_id: int) -> ProcessingJob:
     db.commit()
     db.refresh(job)
     return job
+
+
+def delete_video(db: Session, video_id: int) -> None:
+    """Deletes a video, its processing jobs/tracks/observations/incidents
+    (via FK ON DELETE CASCADE) and every file it owns on disk: the source
+    upload itself, any rendered annotated-preview videos, and any incident
+    evidence frames tied to its jobs."""
+    video = get_video(db, video_id)
+
+    jobs = db.query(ProcessingJob).filter(ProcessingJob.video_source_id == video_id).all()
+
+    paths_to_remove: list[str] = [video.file_path]
+    for job in jobs:
+        if job.annotated_path:
+            paths_to_remove.append(job.annotated_path)
+        incidents = db.query(Incident).filter(Incident.processing_job_id == job.id).all()
+        for incident in incidents:
+            for evidence in incident.evidence:
+                paths_to_remove.append(evidence.frame_path)
+
+    db.delete(video)  # cascades to processing_jobs -> tracked_objects/observations/incidents/evidence
+    db.commit()
+
+    for p in paths_to_remove:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError:
+            pass

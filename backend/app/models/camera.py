@@ -65,6 +65,10 @@ class ProcessingJob(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    # Path to a rendered copy of the source video with detection boxes/track
+    # IDs burned in, so the preview can show exactly what the AI found —
+    # written once tracking finishes, nullable until then.
+    annotated_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     video_source: Mapped["VideoSource"] = relationship(back_populates="processing_jobs")
     detection_model: Mapped["DetectionModel"] = relationship(back_populates="processing_jobs")
