@@ -53,9 +53,10 @@ from app.core.logging import get_logger
 from app.db.base import SessionLocal
 from app.models.camera import JobStatus, ProcessingJob, VideoSource
 from app.models.incident import Incident, IncidentEvidence, IncidentPriority, PerformanceMetric
-from app.models.tracking import ObjectObservation, TrackedObject
+from app.models.tracking import ActivityEvent, EventSeverity, ObjectObservation, TrackedObject
 from app.models.zone import Rule, Zone
 from app.workers.celery_app import celery_app
+from app.workers.events import ActivityEventGenerator
 
 logger = get_logger(__name__)
 
@@ -366,6 +367,7 @@ def process_video_task(self, job_id: int) -> dict:
         tracker = CentroidIoUTracker()
         track_db_ids: dict[int, int] = {}  # tracker track_id -> TrackedObject.id
         track_rule_triggered: set[int] = set()
+        event_generator = ActivityEventGenerator()
 
         zones = db.query(Zone).filter(Zone.camera_id == video.camera_id, Zone.is_active.is_(True)).all() if video.camera_id else []
         zone_polygons = {z.id: (z, [tuple(p) for p in json.loads(z.polygon_json)]) for z in zones}
@@ -457,6 +459,24 @@ def process_video_task(self, job_id: int) -> dict:
                 tracked_obj_row = db.get(TrackedObject, track_db_ids[track_id])
                 tracked_obj_row.final_risk_score = risk
                 db.commit()
+
+                for event_type, severity, description in event_generator.observe(
+                    track_id, det.object_class, risk, motion_anomaly, ts
+                ):
+                    db.add(
+                        ActivityEvent(
+                            processing_job_id=job.id,
+                            tracked_object_id=track_db_ids[track_id],
+                            track_number=track_id,
+                            object_class=det.object_class,
+                            timestamp_seconds=ts,
+                            event_type=event_type,
+                            severity=EventSeverity(severity),
+                            description=description,
+                            risk_score=risk,
+                        )
+                    )
+                    db.commit()
 
                 if matched_zone_id is not None and track_id not in track_rule_triggered:
                     for rule in rules_by_zone.get(matched_zone_id, []):

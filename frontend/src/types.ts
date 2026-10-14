@@ -135,6 +135,19 @@ export interface DashboardSummary {
   incidents_by_priority: Record<string, number>;
 }
 
+export type EventSeverity = "low" | "medium" | "high" | "critical";
+
+export interface ActivityEvent {
+  id: number;
+  track_number: number | null;
+  object_class: string;
+  timestamp_seconds: number;
+  event_type: "status" | "anomaly" | "escalation" | "weapon" | string;
+  severity: EventSeverity;
+  description: string;
+  risk_score: number;
+}
+
 export interface JobProgressMessage {
   job_id: number;
   status: JobStatus;
@@ -142,6 +155,7 @@ export interface JobProgressMessage {
   error_message: string | null;
   total_tracked_objects: number;
   class_counts: Record<string, number>;
+  recent_events: ActivityEvent[];
 }
 
 export interface TrackedObjectSummary {

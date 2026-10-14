@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.camera import ProcessingJob
 from app.models.incident import PerformanceMetric
-from app.models.tracking import ObjectObservation, TrackedObject
+from app.models.tracking import ActivityEvent, ObjectObservation, TrackedObject
 
 
 def get_job(db: Session, job_id: int) -> ProcessingJob:
@@ -41,6 +41,48 @@ def get_job_detection_counts(db: Session, job_id: int) -> dict:
     return {
         "class_counts": class_counts,
         "total_tracked_objects": sum(class_counts.values()),
+    }
+
+
+def get_job_events(db: Session, job_id: int, limit: int = 500) -> list[dict]:
+    """The full live-activity narration log for a job, oldest first — what
+    GET /api/jobs/{id}/events returns for post-hoc review of a completed
+    job. The WebSocket carries only the newest slice of this while a job
+    is still processing (see get_recent_events)."""
+    get_job(db, job_id)  # validate exists
+    rows = (
+        db.query(ActivityEvent)
+        .filter(ActivityEvent.processing_job_id == job_id)
+        .order_by(ActivityEvent.timestamp_seconds.asc(), ActivityEvent.id.asc())
+        .limit(limit)
+        .all()
+    )
+    return [_serialize_event(e) for e in rows]
+
+
+def get_recent_events(db: Session, job_id: int, limit: int = 15) -> list[dict]:
+    """Newest `limit` events, oldest-first within that slice — cheap enough
+    to call on every WebSocket poll tick while a job is processing."""
+    rows = (
+        db.query(ActivityEvent)
+        .filter(ActivityEvent.processing_job_id == job_id)
+        .order_by(ActivityEvent.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_serialize_event(e) for e in reversed(rows)]
+
+
+def _serialize_event(e: ActivityEvent) -> dict:
+    return {
+        "id": e.id,
+        "track_number": e.track_number,
+        "object_class": e.object_class,
+        "timestamp_seconds": e.timestamp_seconds,
+        "event_type": e.event_type,
+        "severity": e.severity.value,
+        "description": e.description,
+        "risk_score": e.risk_score,
     }
 
 

@@ -7,7 +7,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.db.base import SessionLocal
 from app.models.camera import ProcessingJob
 from app.models.incident import Incident
-from app.services.job_service import get_job_detection_counts
+from app.services.job_service import get_job_detection_counts, get_recent_events
 from app.websocket.manager import manager
 
 router = APIRouter()
@@ -37,6 +37,7 @@ async def ws_job_progress(websocket: WebSocket, job_id: int):
                         "error_message": job.error_message,
                         "total_tracked_objects": counts["total_tracked_objects"],
                         "class_counts": counts["class_counts"],
+                        "recent_events": get_recent_events(db, job_id),
                     }
                     if payload != last_payload:
                         await websocket.send_json(payload)

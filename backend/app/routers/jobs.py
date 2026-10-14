@@ -42,6 +42,14 @@ def get_annotated_video(
     return stream_video_file(job.annotated_path, request)
 
 
+@router.get("/{job_id}/events")
+def get_job_events(job_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Full live-activity narration log for this job, oldest first — what
+    the Video Detail page's activity panel replays for a completed job.
+    Safe to call mid-processing too; rows are written incrementally."""
+    return job_service.get_job_events(db, job_id)
+
+
 @router.get("/{job_id}/metrics")
 def get_job_metrics(job_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     metrics = job_service.get_job_metrics(db, job_id)

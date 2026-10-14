@@ -1,8 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient, authenticatedStreamUrl } from "../api/client";
-import type { Incident, JobDetectionsSummary, JobProgressMessage, ProcessingJob, VideoSource } from "../types";
+import type {
+  ActivityEvent,
+  Incident,
+  JobDetectionsSummary,
+  JobProgressMessage,
+  ProcessingJob,
+  VideoSource,
+} from "../types";
 import { useWebSocket } from "../hooks/useWebSocket";
 
 const statusLabel: Record<string, string> = {
@@ -12,11 +19,32 @@ const statusLabel: Record<string, string> = {
   failed: "Failed",
 };
 
+const severityStyle: Record<string, string> = {
+  critical: "text-status-critical border-status-critical/40 bg-status-critical/10 font-bold",
+  high: "text-status-high border-status-high/40 bg-status-high/10",
+  medium: "text-status-medium border-status-medium/40 bg-status-medium/10",
+  low: "text-status-low border-ops-border bg-transparent",
+};
+
+const eventTypeIcon: Record<string, string> = {
+  weapon: "⚠",
+  anomaly: "◆",
+  escalation: "▲",
+  status: "·",
+};
+
+function formatClock(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 export default function VideoDetail() {
   const { id } = useParams();
   const videoId = Number(id);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const logEndRef = useRef<HTMLDivElement>(null);
 
   const { data: video } = useQuery({
     queryKey: ["video", videoId],
@@ -69,6 +97,37 @@ export default function VideoDetail() {
     enabled: !!activeJob && activeJob.status === "completed",
   });
 
+  // Full canonical event log once the job completes (the WebSocket only
+  // ever carries the newest ~15 events while processing).
+  const { data: finalEvents } = useQuery({
+    queryKey: ["job-events", activeJob?.id],
+    queryFn: async () => (await apiClient.get<ActivityEvent[]>(`/api/jobs/${activeJob!.id}/events`)).data,
+    enabled: !!activeJob && activeJob.status === "completed",
+  });
+
+  // While a job is live, accumulate every event seen over the WebSocket
+  // (deduped by id) rather than just showing the latest tick's slice, so
+  // the feed on the right reads as a continuous narration instead of
+  // losing earlier lines.
+  const [liveEvents, setLiveEvents] = useState<ActivityEvent[]>([]);
+  useEffect(() => {
+    setLiveEvents([]);
+  }, [activeJob?.id]);
+  useEffect(() => {
+    if (!jobUpdate?.recent_events?.length) return;
+    setLiveEvents((prev) => {
+      const byId = new Map(prev.map((e) => [e.id, e]));
+      for (const e of jobUpdate.recent_events) byId.set(e.id, e);
+      return Array.from(byId.values()).sort((a, b) => a.timestamp_seconds - b.timestamp_seconds || a.id - b.id);
+    });
+  }, [jobUpdate]);
+
+  const events = activeJob?.status === "completed" ? finalEvents ?? [] : liveEvents;
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [events.length]);
+
   const { data: incidents } = useQuery({
     queryKey: ["incidents-for-video", videoId],
     queryFn: async () =>
@@ -88,6 +147,11 @@ export default function VideoDetail() {
   const liveCounts = jobUpdate?.class_counts ?? detections?.class_counts ?? {};
   const liveTotal = jobUpdate?.total_tracked_objects ?? detections?.total_tracked_objects ?? 0;
   const classEntries = Object.entries(liveCounts).sort((a, b) => b[1] - a[1]);
+
+  const worstSeverity = events.reduce<string>((worst, e) => {
+    const rank: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+    return rank[e.severity] > rank[worst] ? e.severity : worst;
+  }, "low");
 
   // Prefer the annotated preview (detection boxes/track IDs burned in) once
   // it exists for the latest completed job; otherwise fall back to the raw
@@ -122,8 +186,8 @@ export default function VideoDetail() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="md:col-span-2 space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 space-y-4">
           <div className="bg-ops-panel border border-ops-border rounded-lg p-4">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400">Preview</h2>
@@ -134,12 +198,7 @@ export default function VideoDetail() {
               )}
             </div>
             {previewSrc ? (
-              <video
-                key={previewSrc}
-                controls
-                className="w-full rounded bg-black aspect-video"
-                src={previewSrc}
-              />
+              <video key={previewSrc} controls className="w-full rounded bg-black aspect-video" src={previewSrc} />
             ) : (
               <div className="aspect-video bg-black rounded flex items-center justify-center text-slate-600 text-sm">
                 No video available.
@@ -155,9 +214,7 @@ export default function VideoDetail() {
             <div className="mt-3 flex items-center gap-4 text-sm text-slate-400 tabular">
               <span>Duration: {video?.duration_seconds?.toFixed(0) ?? "-"}s</span>
               <span>FPS: {video?.fps?.toFixed(1) ?? "-"}</span>
-              <span>
-                Resolution: {video?.width && video?.height ? `${video.width}x${video.height}` : "-"}
-              </span>
+              <span>Resolution: {video?.width && video?.height ? `${video.width}x${video.height}` : "-"}</span>
             </div>
             <button
               onClick={() => reprocessMutation.mutate()}
@@ -210,7 +267,9 @@ export default function VideoDetail() {
             </h2>
             {classEntries.length === 0 && (
               <p className="text-sm text-slate-500">
-                {isLive ? "Watching for people and vehicles in the footage…" : "Nothing detected yet — run analysis to find out what's in this video."}
+                {isLive
+                  ? "Watching for people and vehicles in the footage…"
+                  : "Nothing detected yet — run analysis to find out what's in this video."}
               </p>
             )}
             {classEntries.length > 0 && (
@@ -256,17 +315,51 @@ export default function VideoDetail() {
           </div>
         </div>
 
-        <div className="bg-ops-panel border border-ops-border rounded-lg p-4">
-          <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400 mb-3">Incidents</h2>
-          <ul className="space-y-2 text-sm">
-            {incidents?.length === 0 && <p className="text-slate-500">No incidents detected.</p>}
-            {incidents?.map((incident) => (
-              <li key={incident.id} className="border-b border-ops-border pb-2">
-                <p className="text-slate-300">{incident.summary}</p>
-                <p className="text-xs text-status-critical font-semibold">Risk: {incident.star_risk_score.toFixed(1)}</p>
-              </li>
-            ))}
-          </ul>
+        {/* Right column: live activity narration — the primary surface for
+            "what's happening right now", with incidents below it. */}
+        <div className="space-y-4">
+          <div className="bg-ops-panel border border-ops-border rounded-lg p-4 flex flex-col max-h-[640px]">
+            <div className="flex items-center justify-between mb-3 shrink-0">
+              <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400">Activity Log</h2>
+              {worstSeverity !== "low" && (
+                <span className={`text-[10px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border ${severityStyle[worstSeverity]}`}>
+                  {worstSeverity}
+                </span>
+              )}
+            </div>
+            <div className="overflow-y-auto flex-1 space-y-1.5 pr-1">
+              {events.length === 0 && (
+                <p className="text-sm text-slate-500">
+                  {isLive ? "Watching the footage — narration will appear here as the AI finds things." : "No activity recorded yet."}
+                </p>
+              )}
+              {events.map((e) => (
+                <div key={e.id} className={`rounded-md border px-2.5 py-1.5 text-xs ${severityStyle[e.severity]}`}>
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                    <span className="font-mono tabular text-slate-400">{formatClock(e.timestamp_seconds)}</span>
+                    <span className="font-mono uppercase tracking-wide text-[10px] opacity-80">
+                      {eventTypeIcon[e.event_type] ?? "·"} {e.severity}
+                    </span>
+                  </div>
+                  <p className="leading-snug">{e.description}</p>
+                </div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+          </div>
+
+          <div className="bg-ops-panel border border-ops-border rounded-lg p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400 mb-3">Incidents</h2>
+            <ul className="space-y-2 text-sm">
+              {incidents?.length === 0 && <p className="text-slate-500">No incidents detected.</p>}
+              {incidents?.map((incident) => (
+                <li key={incident.id} className="border-b border-ops-border pb-2 last:border-0">
+                  <p className="text-slate-300">{incident.summary}</p>
+                  <p className="text-xs text-status-critical font-semibold">Risk: {incident.star_risk_score.toFixed(1)}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       </div>
     </div>

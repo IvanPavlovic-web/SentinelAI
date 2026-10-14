@@ -294,6 +294,7 @@ DELETE /api/videos/{id}             (also removes its jobs/tracks/incidents/evid
 GET    /api/jobs/{id}
 GET    /api/jobs/{id}/metrics
 GET    /api/jobs/{id}/detections       (live, works mid-processing — see below)
+GET    /api/jobs/{id}/events           (live activity narration log — see below)
 GET    /api/jobs/{id}/annotated-video  (detection-overlay preview, HTTP Range-capable)
 GET    /api/videos/{id}/jobs           (every job ever run for a video, newest first)
 
@@ -358,6 +359,44 @@ is the separate, optional layer on top (see [Known limitations](#known-limitatio
 Once a job completes, `GET /api/jobs/{id}/detections` additionally returns
 full per-track detail (class, confidence, observation count, final
 STAR-Risk score).
+
+### Live activity log — narrating what's happening, not just what's detected
+
+Alongside the raw class counts, the pipeline generates a human-readable
+narration stream (`app/workers/events.py`, the `ActivityEventGenerator`
+class) as it tracks each object, written to the `activity_events` table
+and rendered on the right-hand panel of the Video Detail page. One instance
+runs per job, fed every observation in temporal order, and emits a new line
+only when something is actually worth saying:
+
+- **Anomaly** — the first observation where a track's motion-anomaly score
+  (direction reversals / speed bursts, from `calculate_motion_anomaly`)
+  crosses `ANOMALY_EVENT_THRESHOLD` (default 0.5): *"Person track #2 is
+  moving erratically (anomaly score 1.00) — possible suspicious behavior."*
+- **Escalation** — whenever a track's STAR-Risk severity bucket increases
+  (low → medium → high → critical): *"Person track #2 risk escalated to
+  MEDIUM (STAR-Risk 40.1)."*
+- **Weapon** — any detection whose class name matches `WEAPON_CLASS_NAMES`
+  (case-insensitive; default `knife,gun,pistol,rifle,weapon,firearm`),
+  always `critical` severity, flagged once per track.
+- **Status** — a heartbeat line at most every `EVENT_HEARTBEAT_SECONDS`
+  (default 3s) per track when nothing else fired, so the log reads as a
+  continuous narration rather than only alerts: *"...continues moving
+  normally"* at low severity, *"...remains at elevated risk"* otherwise.
+
+Every event is persisted with its severity, timestamp, and the risk score
+that produced it (`GET /api/jobs/{id}/events` replays the full log for a
+completed job); the WebSocket carries only the newest ~15 at a time while
+a job is processing, and the frontend accumulates/dedupes them client-side
+so the panel never loses earlier lines.
+
+**On weapon detection specifically:** the bundled `yolov8n.pt` is trained
+on COCO, whose 80 classes do **not** include any weapon category — so the
+weapon-event path is real, wired, and tested end-to-end, but will never
+actually fire against the default model. It activates automatically the
+moment `YOLO_MODEL_PATH` points at a model trained with weapon classes
+matching `WEAPON_CLASS_NAMES` (several open-source weapon-detection YOLO
+checkpoints exist); no code changes needed, just a different model file.
 
 ## Repository structure
 

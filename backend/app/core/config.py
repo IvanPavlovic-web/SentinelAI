@@ -58,6 +58,17 @@ class Settings(BaseSettings):
     INCIDENT_RISK_THRESHOLD: float = 70.0
     INCIDENT_CONSECUTIVE_REQUIRED: int = 3
 
+    # Live activity-log generation (see app/workers/events.py). Detected
+    # class names matching WEAPON_CLASS_NAMES (case-insensitive) are flagged
+    # critical. NOTE: the bundled yolov8n.pt is COCO-pretrained, and COCO's
+    # 80 classes do NOT include any weapon category (no gun/knife/rifle) —
+    # so this will never actually fire with the default model. It only
+    # activates if YOLO_MODEL_PATH is pointed at a model trained with these
+    # class names; see README "Known limitations".
+    WEAPON_CLASS_NAMES: str = "knife,gun,pistol,rifle,weapon,firearm"
+    ANOMALY_EVENT_THRESHOLD: float = 0.5  # motion_anomaly score that counts as "suspicious movement"
+    EVENT_HEARTBEAT_SECONDS: float = 3.0  # max gap before a routine "still visible" status line
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
@@ -65,6 +76,10 @@ class Settings(BaseSettings):
     @property
     def allowed_video_extensions_list(self) -> list[str]:
         return [e.strip().lower() for e in self.ALLOWED_VIDEO_EXTENSIONS.split(",") if e.strip()]
+
+    @property
+    def weapon_class_names_set(self) -> set[str]:
+        return {c.strip().lower() for c in self.WEAPON_CLASS_NAMES.split(",") if c.strip()}
 
 
 settings = Settings()
