@@ -4,6 +4,13 @@ import { apiClient } from "../api/client";
 import type { DashboardSummary, Incident, PaginatedIncidents } from "../types";
 import StatTile from "../components/StatTile";
 
+const priorityPill: Record<string, string> = {
+  critical: "text-status-critical border-status-critical/40 bg-status-critical/10",
+  high: "text-status-high border-status-high/40 bg-status-high/10",
+  medium: "text-status-medium border-status-medium/40 bg-status-medium/10",
+  low: "text-status-low border-status-low/40 bg-status-low/10",
+};
+
 export default function Dashboard() {
   const { data: summary } = useQuery({
     queryKey: ["dashboard-summary"],
@@ -23,45 +30,66 @@ export default function Dashboard() {
     : [];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-xl font-bold">Operations Dashboard</h1>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatTile label="Active Cameras" value={summary?.active_cameras ?? "-"} />
-        <StatTile label="Total Videos" value={summary?.total_videos ?? "-"} />
-        <StatTile label="Open Incidents" value={summary?.open_incidents ?? "-"} accent="red" />
-        <StatTile label="Incidents (24h)" value={summary?.incidents_last_24h ?? "-"} accent="amber" />
+    <div className="space-y-7">
+      <div>
+        <p className="text-[11px] uppercase tracking-widest2 text-ops-accent font-medium mb-1">Operations</p>
+        <h1 className="font-display text-2xl font-semibold">Dashboard</h1>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatTile label="Jobs Pending" value={summary?.jobs_pending ?? "-"} />
-        <StatTile label="Jobs Processing" value={summary?.jobs_processing ?? "-"} accent="amber" />
-        <StatTile label="Jobs Completed" value={summary?.jobs_completed ?? "-"} accent="green" />
-        <StatTile label="Jobs Failed" value={summary?.jobs_failed ?? "-"} accent="red" />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+        <StatTile label="Active Cameras" value={summary?.active_cameras ?? "–"} />
+        <StatTile label="Total Videos" value={summary?.total_videos ?? "–"} />
+        <StatTile label="Open Incidents" value={summary?.open_incidents ?? "–"} accent="red" />
+        <StatTile label="Incidents (24h)" value={summary?.incidents_last_24h ?? "–"} accent="amber" />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-ops-panel border border-ops-border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-slate-300 mb-3">Incidents by Priority</h2>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+        <StatTile label="Jobs Pending" value={summary?.jobs_pending ?? "–"} />
+        <StatTile label="Jobs Processing" value={summary?.jobs_processing ?? "–"} accent="amber" />
+        <StatTile label="Jobs Completed" value={summary?.jobs_completed ?? "–"} accent="green" />
+        <StatTile label="Jobs Failed" value={summary?.jobs_failed ?? "–"} accent="red" />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <div className="bg-ops-panel border border-ops-border rounded-lg p-5">
+          <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400 mb-4">Incidents by Priority</h2>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={priorityData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-              <XAxis dataKey="priority" stroke="#94a3b8" fontSize={12} />
-              <YAxis stroke="#94a3b8" fontSize={12} allowDecimals={false} />
-              <Tooltip contentStyle={{ background: "#121823", border: "1px solid #1f2937" }} />
-              <Bar dataKey="count" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e2838" vertical={false} />
+              <XAxis dataKey="priority" stroke="#64748b" fontSize={11} tickLine={false} axisLine={{ stroke: "#1e2838" }} />
+              <YAxis stroke="#64748b" fontSize={11} allowDecimals={false} tickLine={false} axisLine={false} />
+              <Tooltip
+                cursor={{ fill: "rgba(245,165,36,0.06)" }}
+                contentStyle={{ background: "#111722", border: "1px solid #1e2838", borderRadius: 8, fontSize: 12 }}
+                labelStyle={{ color: "#e2e8f0" }}
+              />
+              <Bar dataKey="count" fill="#f5a524" radius={[4, 4, 0, 0]} maxBarSize={48} />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        <div className="bg-ops-panel border border-ops-border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-slate-300 mb-3">Recent Incidents</h2>
-          <ul className="space-y-2 text-sm">
-            {incidents?.items.length === 0 && <p className="text-slate-500">No incidents yet.</p>}
+        <div className="bg-ops-panel border border-ops-border rounded-lg p-5">
+          <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400 mb-4">Recent Incidents</h2>
+          {incidents?.items.length === 0 && (
+            <p className="text-sm text-slate-500">No incidents yet — the dashboard will populate once a video is processed.</p>
+          )}
+          <ul className="space-y-1">
             {incidents?.items.map((incident: Incident) => (
-              <li key={incident.id} className="flex justify-between border-b border-ops-border pb-2">
-                <span className="text-slate-300">{incident.summary.slice(0, 60)}...</span>
-                <span className="text-amber-400 font-semibold">{incident.star_risk_score.toFixed(1)}</span>
+              <li
+                key={incident.id}
+                className="flex items-center justify-between gap-3 py-2.5 border-b border-ops-border last:border-0"
+              >
+                <span className="text-sm text-slate-300 truncate min-w-0">{incident.summary}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span
+                    className={`text-[10px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border ${
+                      priorityPill[incident.priority] ?? priorityPill.low
+                    }`}
+                  >
+                    {incident.priority}
+                  </span>
+                  <span className="tabular text-sm font-medium text-ops-accent">{incident.star_risk_score.toFixed(1)}</span>
+                </div>
               </li>
             ))}
           </ul>

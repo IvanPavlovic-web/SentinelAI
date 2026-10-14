@@ -25,46 +25,57 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-ops-bg">
-      <div className="w-full max-w-sm bg-ops-panel border border-ops-border rounded-lg p-8">
-        <h1 className="text-xl font-bold text-amber-400 mb-1">SentinelAI</h1>
-        <p className="text-sm text-slate-400 mb-6">Edge Video Intelligence & Incident Detection</p>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              className="w-full rounded bg-slate-900 border border-ops-border px-3 py-2 text-sm focus:outline-none focus:border-amber-500"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="w-full rounded bg-slate-900 border border-ops-border px-3 py-2 text-sm focus:outline-none focus:border-amber-500"
-            />
-          </div>
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full rounded bg-amber-500 text-slate-950 font-semibold py-2 text-sm hover:bg-amber-400 disabled:opacity-50"
-          >
-            {submitting ? "Signing in..." : "Sign in"}
-          </button>
-        </form>
-        <p className="text-xs text-slate-400 mt-4">
-          No account?{" "}
-          <Link to="/register" className="text-amber-400 hover:underline">
-            Register
-          </Link>
-        </p>
+    <div className="min-h-screen flex items-center justify-center bg-ops-bg px-4">
+      <div className="w-full max-w-sm">
+        <div className="flex items-center gap-2.5 mb-7 justify-center">
+          <svg viewBox="0 0 24 24" className="w-7 h-7 text-ops-accent" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z" />
+          </svg>
+          <span className="font-display text-xl font-semibold">SentinelAI</span>
+        </div>
+
+        <div className="bg-ops-panel border border-ops-border rounded-lg p-8">
+          <p className="text-[11px] uppercase tracking-widest2 text-slate-500 mb-1">Operations Console</p>
+          <h1 className="text-lg font-semibold mb-6">Sign in to continue</h1>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label htmlFor="login-email" className="block text-xs text-slate-400 mb-1.5">Email</label>
+              <input
+                id="login-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="w-full rounded-md bg-ops-panel2 border border-ops-border px-3 py-2.5 text-sm transition-colors focus:outline-none focus:border-ops-accent"
+              />
+            </div>
+            <div>
+              <label htmlFor="login-password" className="block text-xs text-slate-400 mb-1.5">Password</label>
+              <input
+                id="login-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="w-full rounded-md bg-ops-panel2 border border-ops-border px-3 py-2.5 text-sm transition-colors focus:outline-none focus:border-ops-accent"
+              />
+            </div>
+            {error && <p className="text-xs text-status-critical">{error}</p>}
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full rounded-md bg-ops-accent text-ops-bg font-semibold py-2.5 text-sm transition-colors hover:bg-ops-accentDim disabled:opacity-50"
+            >
+              {submitting ? "Signing in…" : "Sign in"}
+            </button>
+          </form>
+          <p className="text-xs text-slate-500 mt-5 text-center">
+            No account?{" "}
+            <Link to="/register" className="text-ops-accent hover:underline">
+              Register
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   );

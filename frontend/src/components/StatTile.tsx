@@ -4,18 +4,26 @@ interface StatTileProps {
   accent?: "default" | "amber" | "red" | "green";
 }
 
-const accentClasses: Record<string, string> = {
+const accentText: Record<string, string> = {
   default: "text-slate-100",
-  amber: "text-amber-400",
-  red: "text-red-400",
-  green: "text-emerald-400",
+  amber: "text-status-high",
+  red: "text-status-critical",
+  green: "text-status-ok",
+};
+
+const accentBar: Record<string, string> = {
+  default: "bg-ops-borderStrong",
+  amber: "bg-status-high",
+  red: "bg-status-critical",
+  green: "bg-status-ok",
 };
 
 export default function StatTile({ label, value, accent = "default" }: StatTileProps) {
   return (
-    <div className="bg-ops-panel border border-ops-border rounded-lg px-5 py-4">
-      <p className="text-xs uppercase tracking-wide text-slate-400 mb-1">{label}</p>
-      <p className={`text-2xl font-bold ${accentClasses[accent]}`}>{value}</p>
+    <div className="relative bg-ops-panel border border-ops-border rounded-lg px-5 py-4 overflow-hidden">
+      <span className={`absolute inset-x-0 top-0 h-0.5 ${accentBar[accent]}`} />
+      <p className="text-[11px] uppercase tracking-widest2 text-slate-500 mb-1.5 font-medium">{label}</p>
+      <p className={`tabular text-[1.7rem] font-medium leading-none ${accentText[accent]}`}>{value}</p>
     </div>
   );
 }
