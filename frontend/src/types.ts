@@ -41,6 +41,11 @@ export interface VideoSource {
 
 export type JobStatus = "pending" | "processing" | "completed" | "failed";
 
+export interface VideoUploadResponse {
+  video_source: VideoSource;
+  processing_job: ProcessingJob;
+}
+
 export interface ProcessingJob {
   id: number;
   video_source_id: number;
@@ -127,6 +132,32 @@ export interface DashboardSummary {
   open_incidents: number;
   incidents_last_24h: number;
   incidents_by_priority: Record<string, number>;
+}
+
+export interface JobProgressMessage {
+  job_id: number;
+  status: JobStatus;
+  progress_percent: number;
+  error_message: string | null;
+  total_tracked_objects: number;
+  class_counts: Record<string, number>;
+}
+
+export interface TrackedObjectSummary {
+  track_number: number;
+  object_class: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  max_confidence: number | null;
+  observation_count: number;
+  final_risk_score: number;
+}
+
+export interface JobDetectionsSummary {
+  job_id: number;
+  total_tracked_objects: number;
+  class_counts: Record<string, number>;
+  tracks: TrackedObjectSummary[];
 }
 
 export interface PerformancePoint {

@@ -7,6 +7,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.db.base import SessionLocal
 from app.models.camera import ProcessingJob
 from app.models.incident import Incident
+from app.services.job_service import get_job_detection_counts
 from app.websocket.manager import manager
 
 router = APIRouter()
@@ -25,11 +26,17 @@ async def ws_job_progress(websocket: WebSocket, job_id: int):
             try:
                 job = db.get(ProcessingJob, job_id)
                 if job is not None:
+                    # Detection counts are included on every tick (not just
+                    # on completion) so the client sees what the pipeline is
+                    # finding in real time while it's still processing.
+                    counts = get_job_detection_counts(db, job_id)
                     payload = {
                         "job_id": job.id,
                         "status": job.status.value,
                         "progress_percent": job.progress_percent,
                         "error_message": job.error_message,
+                        "total_tracked_objects": counts["total_tracked_objects"],
+                        "class_counts": counts["class_counts"],
                     }
                     if payload != last_payload:
                         await websocket.send_json(payload)

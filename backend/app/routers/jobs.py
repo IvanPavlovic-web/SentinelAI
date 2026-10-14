@@ -16,6 +16,15 @@ def get_job(job_id: int, db: Session = Depends(get_db), current_user=Depends(get
     return job_service.get_job(db, job_id)
 
 
+@router.get("/{job_id}/detections")
+def get_job_detections(job_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """What the pipeline actually found in the footage for this job — object
+    classes and counts, and per-track detail — independent of whether any
+    zone/rule triggered an incident. Safe to poll while a job is still
+    processing; rows are written incrementally."""
+    return job_service.get_job_detections(db, job_id)
+
+
 @router.get("/{job_id}/metrics")
 def get_job_metrics(job_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     metrics = job_service.get_job_metrics(db, job_id)

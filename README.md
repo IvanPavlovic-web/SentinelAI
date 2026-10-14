@@ -284,6 +284,8 @@ PATCH        /api/rules/{id}
 
 GET    /api/jobs/{id}
 GET    /api/jobs/{id}/metrics
+GET    /api/jobs/{id}/detections    (live, works mid-processing — see below)
+GET    /api/videos/{id}/jobs        (every job ever run for a video, newest first)
 
 GET    /api/incidents          (paginated; filters: status, priority, date, camera, object_class)
 GET    /api/incidents/{id}
@@ -302,17 +304,34 @@ Full interactive OpenAPI/Swagger docs are served at
 
 ## Frontend
 
-A dark "security operations" theme (slate/amber/red, not a generic AI
-gradient), built with React, Vite, TypeScript and Tailwind. Pages: Login /
-Register, Dashboard (stat tiles, incidents-by-priority chart, recent
-incidents, queue status), Video Library (upload + processing status),
-Video Detail (progress, detections timeline, linked incidents, evidence
-thumbnails), Cameras & Zones (polygon zones via normalized coordinates with
+A black/white/gray "security operations" theme (no accent hue — hierarchy
+comes from brightness and weight), built with React, Vite, TypeScript and
+Tailwind. Pages: Login / Register, Dashboard (stat tiles, incidents-by-priority
+chart, recent incidents, queue status), Video Library (upload + processing
+status), Video Detail (live analysis status, detections timeline, linked
+incidents), Cameras & Zones (polygon zones via normalized coordinates with
 a preview), Incidents (filterable table with a resolve/dismiss workflow),
 Performance (latency/FPS/queue/CPU/RAM charts via Recharts), and an
 admin-only Audit Logs page. Data is fetched with TanStack Query, navigation
 uses React Router, and job progress/incidents arrive live through a
 WebSocket hook.
+
+### Real-time detection reporting
+
+Uploading a video takes you straight to its Video Detail page, which
+subscribes to `/ws/jobs/{id}` immediately — no need to trigger reprocessing
+first. While the job is still running, every WebSocket tick carries the
+running count of detected object classes (`class_counts`,
+`total_tracked_objects`), not just a percentage: `tracked_objects` and
+`object_observations` rows are committed to the database incrementally as
+the pipeline runs, so "what's in this footage" becomes visible within
+seconds of upload rather than only after the whole job finishes. This works
+**independently of whether the video's camera has any zone/rule
+configured** — detection and tracking always run; zone/incident evaluation
+is the separate, optional layer on top (see [Known limitations](#known-limitations)).
+Once a job completes, `GET /api/jobs/{id}/detections` additionally returns
+full per-track detail (class, confidence, observation count, final
+STAR-Risk score).
 
 ## Repository structure
 
@@ -505,6 +524,13 @@ curl -X PATCH localhost:8000/api/incidents/1/status -H "Authorization: Bearer <t
 - Video playback on the Video Detail page is currently a placeholder;
   serving static files/signed URLs from `uploads/` would be needed for real
   in-browser playback.
+- Detection/tracking always runs on upload, but **incidents only fire for
+  videos linked to a camera that has an active zone and rule** — if you
+  upload a video without selecting a camera (the default from the Video
+  Library upload button), you'll see real detections and tracks on the
+  Video Detail page but zero incidents, which is expected rather than a
+  bug. Attach a camera with a configured zone under Cameras & Zones and
+  reprocess to also get incident scoring.
 
 ## Future improvements
 

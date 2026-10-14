@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { apiClient } from "../api/client";
-import type { VideoSource } from "../types";
+import type { VideoSource, VideoUploadResponse } from "../types";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -18,6 +18,7 @@ function formatBytes(bytes: number): string {
 
 export default function VideoLibrary() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +35,7 @@ export default function VideoLibrary() {
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append("file", file);
-      return apiClient.post("/api/videos/upload", formData, {
+      return apiClient.post<VideoUploadResponse>("/api/videos/upload", formData, {
         headers: { "Content-Type": "multipart/form-data" },
         // No axios timeout is set globally, and large footage (multi-GB,
         // multi-hour recordings) can legitimately take a long time to
@@ -47,8 +48,12 @@ export default function VideoLibrary() {
         },
       });
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ["videos"] });
+      // Jump straight to the video's live analysis view — processing has
+      // already been queued by the upload endpoint, so the user watches
+      // detection happen in real time instead of waiting on this list.
+      navigate(`/videos/${res.data.video_source.id}`);
     },
     onError: (err: unknown) => {
       const detail =

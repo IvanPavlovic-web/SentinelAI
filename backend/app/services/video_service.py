@@ -88,6 +88,16 @@ def get_video(db: Session, video_id: int) -> VideoSource:
     return video
 
 
+def list_jobs_for_video(db: Session, video_id: int) -> list[ProcessingJob]:
+    get_video(db, video_id)  # validate exists
+    return (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.video_source_id == video_id)
+        .order_by(ProcessingJob.created_at.desc())
+        .all()
+    )
+
+
 def create_reprocess_job(db: Session, video_id: int) -> ProcessingJob:
     get_video(db, video_id)  # validate exists
     job = ProcessingJob(video_source_id=video_id, status=JobStatus.PENDING)
