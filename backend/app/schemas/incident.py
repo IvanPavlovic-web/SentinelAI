@@ -27,7 +27,7 @@ class IncidentRead(BaseModel):
     tracked_object_id: int | None
     rule_id: int | None
     object_class: str
-    star_risk_score: float
+    risk_score: float
     status: IncidentStatus
     priority: IncidentPriority
     summary: str
@@ -35,6 +35,8 @@ class IncidentRead(BaseModel):
     resolved_by: int | None
     resolved_at: datetime | None
     detected_at: datetime
+    alert_sent: bool
+    alert_channels: str | None
     evidence: list[IncidentEvidenceRead] = []
 
 

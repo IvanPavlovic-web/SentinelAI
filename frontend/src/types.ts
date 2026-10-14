@@ -24,6 +24,7 @@ export interface Camera {
   owner_id: number | null;
   created_at: string;
   updated_at: string;
+  latest_job_status: JobStatus | null;
 }
 
 export interface VideoSource {
@@ -39,7 +40,7 @@ export interface VideoSource {
   created_at: string;
 }
 
-export type JobStatus = "pending" | "processing" | "completed" | "failed";
+export type JobStatus = "pending" | "processing" | "completed" | "failed" | "stopped";
 
 export interface VideoUploadResponse {
   video_source: VideoSource;
@@ -48,7 +49,10 @@ export interface VideoUploadResponse {
 
 export interface ProcessingJob {
   id: number;
-  video_source_id: number;
+  video_source_id: number | null;
+  camera_id: number | null;
+  is_live: boolean;
+  stop_requested: boolean;
   status: JobStatus;
   progress_percent: number;
   error_message: string | null;
@@ -56,6 +60,19 @@ export interface ProcessingJob {
   finished_at: string | null;
   created_at: string;
   has_annotated_video: boolean;
+}
+
+export interface CameraSnapshotInfo {
+  exists: boolean;
+  last_updated: string | null;
+}
+
+export interface CameraConnectionTestResult {
+  ok: boolean;
+  detail?: string;
+  width?: number;
+  height?: number;
+  fps?: number;
 }
 
 export type ZoneSeverity = "low" | "medium" | "high" | "critical";
@@ -104,7 +121,7 @@ export interface Incident {
   tracked_object_id: number | null;
   rule_id: number | null;
   object_class: string;
-  star_risk_score: number;
+  risk_score: number;
   status: IncidentStatus;
   priority: IncidentPriority;
   summary: string;
@@ -112,6 +129,8 @@ export interface Incident {
   resolved_by: number | null;
   resolved_at: string | null;
   detected_at: string;
+  alert_sent: boolean;
+  alert_channels: string | null;
   evidence: IncidentEvidence[];
 }
 

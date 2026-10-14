@@ -14,6 +14,7 @@ class JobStatus(str, enum.Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    STOPPED = "stopped"  # a live-camera session, ended deliberately via the stop API
 
 
 class Camera(Base):
@@ -23,13 +24,16 @@ class Camera(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     rtsp_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # False until a monitoring session is explicitly started (POST
+    # /api/cameras/{id}/start); adding a camera never starts it by itself.
+    is_active: Mapped[bool] = mapped_column(default=False, nullable=False)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     video_sources: Mapped[list["VideoSource"]] = relationship(back_populates="camera", cascade="all, delete-orphan")
     zones: Mapped[list["Zone"]] = relationship(back_populates="camera", cascade="all, delete-orphan")  # noqa: F821
+    processing_jobs: Mapped[list["ProcessingJob"]] = relationship(back_populates="camera", cascade="all, delete-orphan")
 
 
 class VideoSource(Base):
@@ -56,7 +60,15 @@ class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    video_source_id: Mapped[int] = mapped_column(ForeignKey("video_sources.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Exactly one of these is set: video_source_id for an uploaded-file job,
+    # camera_id for a live-camera monitoring session.
+    video_source_id: Mapped[int | None] = mapped_column(ForeignKey("video_sources.id", ondelete="CASCADE"), nullable=True, index=True)
+    camera_id: Mapped[int | None] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=True, index=True)
+    is_live: Mapped[bool] = mapped_column(default=False, nullable=False)
+    # Polled by the live task loop; set by POST /api/cameras/{id}/stop so a
+    # long-running live session can be stopped cleanly without killing the
+    # Celery worker process.
+    stop_requested: Mapped[bool] = mapped_column(default=False, nullable=False)
     detection_model_id: Mapped[int | None] = mapped_column(ForeignKey("detection_models.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus, name="job_status"), default=JobStatus.PENDING, nullable=False, index=True)
     progress_percent: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
@@ -66,11 +78,13 @@ class ProcessingJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     # Path to a rendered copy of the source video with detection boxes/track
-    # IDs burned in, so the preview can show exactly what the AI found —
-    # written once tracking finishes, nullable until then.
+    # IDs burned in, so the preview can show exactly what the AI found,
+    # written once tracking finishes, nullable until then. Live sessions
+    # instead write a continuously refreshed snapshot (see Camera.snapshot_path).
     annotated_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
-    video_source: Mapped["VideoSource"] = relationship(back_populates="processing_jobs")
+    video_source: Mapped["VideoSource | None"] = relationship(back_populates="processing_jobs")
+    camera: Mapped["Camera | None"] = relationship(back_populates="processing_jobs")
     detection_model: Mapped["DetectionModel"] = relationship(back_populates="processing_jobs")
     performance_metrics: Mapped[list["PerformanceMetric"]] = relationship(back_populates="processing_job", cascade="all, delete-orphan")  # noqa: F821
 

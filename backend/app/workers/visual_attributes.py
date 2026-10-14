@@ -1,8 +1,8 @@
 """Visual attribute extraction for rich scene narration.
 
 Turns a raw bounding box into the kind of detail a human would actually
-say out loud — "a red car", "in the right side of the frame", "moving
-left" — using classical, dependency-free CV (HSV color binning,
+say out loud: "a red car", "in the right side of the frame", "moving
+left", using classical, dependency-free CV (HSV color binning,
 frame-relative geometry, centroid-history direction) rather than a second
 heavy model. Deliberately simple and fast since this runs per sampled
 detection across the whole video.

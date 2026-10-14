@@ -78,6 +78,7 @@ export default function Incidents() {
               <th className="px-4 py-3">Risk</th>
               <th className="px-4 py-3">Priority</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Alert</th>
               <th className="px-4 py-3">Detected</th>
               <th className="px-4 py-3" />
             </tr>
@@ -86,9 +87,21 @@ export default function Incidents() {
             {data?.items.map((incident) => (
               <tr key={incident.id} className="border-t border-ops-border hover:bg-white/[0.02]">
                 <td className="px-4 py-3">{incident.object_class}</td>
-                <td className="px-4 py-3 font-semibold">{incident.star_risk_score.toFixed(1)}</td>
+                <td className="px-4 py-3 font-semibold">{incident.risk_score.toFixed(1)}</td>
                 <td className={`px-4 py-3 uppercase ${priorityColor[incident.priority]}`}>{incident.priority}</td>
                 <td className="px-4 py-3">{incident.status}</td>
+                <td className="px-4 py-3">
+                  {incident.alert_sent ? (
+                    <span
+                      className="text-status-ok text-xs font-mono uppercase tracking-wide"
+                      title={incident.alert_channels ? `Sent via ${incident.alert_channels}` : "Alert attempted; no channel confirmed delivery"}
+                    >
+                      ✓ sent{incident.alert_channels ? ` (${incident.alert_channels})` : ""}
+                    </span>
+                  ) : (
+                    <span className="text-slate-600 text-xs font-mono uppercase tracking-wide">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-slate-400">{new Date(incident.detected_at).toLocaleString()}</td>
                 <td className="px-4 py-3 text-right">
                   <button onClick={() => setSelected(incident)} className="text-ops-accent hover:underline">
@@ -99,7 +112,7 @@ export default function Incidents() {
             ))}
             {data?.items.length === 0 && (
               <tr>
-                <td className="px-4 py-3 text-slate-500" colSpan={6}>
+                <td className="px-4 py-3 text-slate-500" colSpan={7}>
                   No incidents found.
                 </td>
               </tr>

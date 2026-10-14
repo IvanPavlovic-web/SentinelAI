@@ -12,7 +12,7 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# project.py (the CS50P module) is imported by app/algorithms/star_risk.py
+# project.py (the CS50P module) is imported by app/algorithms/risk.py
 COPY project.py /app/project.py
 COPY backend /app/backend
 

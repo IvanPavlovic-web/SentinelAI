@@ -9,7 +9,7 @@ export default {
         mono: ["JetBrains Mono", "ui-monospace", "monospace"],
       },
       colors: {
-        // Strict black/white/gray palette — no hue anywhere in the UI.
+        // Strict black/white/gray palette, no hue anywhere in the UI.
         // Hierarchy and urgency are carried by brightness, weight and
         // borders instead of color.
         ops: {

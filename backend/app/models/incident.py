@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -33,7 +33,7 @@ class Incident(Base):
     tracked_object_id: Mapped[int | None] = mapped_column(ForeignKey("tracked_objects.id", ondelete="SET NULL"), nullable=True)
     rule_id: Mapped[int | None] = mapped_column(ForeignKey("rules.id", ondelete="SET NULL"), nullable=True)
     object_class: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    star_risk_score: Mapped[float] = mapped_column(Float, nullable=False)
+    risk_score: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[IncidentStatus] = mapped_column(Enum(IncidentStatus, name="incident_status"), default=IncidentStatus.OPEN, nullable=False, index=True)
     priority: Mapped[IncidentPriority] = mapped_column(Enum(IncidentPriority, name="incident_priority"), default=IncidentPriority.MEDIUM, nullable=False, index=True)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
@@ -41,6 +41,11 @@ class Incident(Base):
     resolved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    # Real-time alerting (app/services/alert_service.py): whether at least
+    # one channel was actually attempted for this incident (not just
+    # configured), and which ones succeeded, e.g. "email,webhook".
+    alert_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    alert_channels: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     evidence: Mapped[list["IncidentEvidence"]] = relationship(back_populates="incident", cascade="all, delete-orphan")
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.incident import Incident, IncidentStatus
 from app.schemas.incident import IncidentStatusUpdate
@@ -17,11 +17,17 @@ def list_incidents(
     status_filter: str | None = None,
     priority_filter: str | None = None,
     camera_id: int | None = None,
+    processing_job_id: int | None = None,
     object_class: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
 ) -> tuple[list[Incident], int]:
-    query = db.query(Incident)
+    # IncidentRead serializes .evidence for every row; without eager
+    # loading, SQLAlchemy's default lazy="select" relationship fires one
+    # extra query per incident on the page (an N+1) the moment Pydantic
+    # touches that attribute. selectinload replaces that with exactly one
+    # extra query for the whole page, regardless of page_size.
+    query = db.query(Incident).options(selectinload(Incident.evidence))
 
     if status_filter:
         query = query.filter(Incident.status == status_filter)
@@ -29,6 +35,8 @@ def list_incidents(
         query = query.filter(Incident.priority == priority_filter)
     if camera_id is not None:
         query = query.filter(Incident.camera_id == camera_id)
+    if processing_job_id is not None:
+        query = query.filter(Incident.processing_job_id == processing_job_id)
     if object_class:
         query = query.filter(Incident.object_class == object_class)
     if date_from:
@@ -43,7 +51,7 @@ def list_incidents(
 
 
 def get_incident(db: Session, incident_id: int) -> Incident:
-    incident = db.get(Incident, incident_id)
+    incident = db.query(Incident).options(selectinload(Incident.evidence)).filter(Incident.id == incident_id).first()
     if incident is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
     return incident

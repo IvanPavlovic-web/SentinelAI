@@ -63,7 +63,7 @@ def get_video(video_id: int, db: Session = Depends(get_db), current_user=Depends
 
 @router.get("/{video_id}/jobs", response_model=list[ProcessingJobRead])
 def list_video_jobs(video_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    """All processing jobs ever run for this video, newest first — lets the
+    """All processing jobs ever run for this video, newest first, lets the
     frontend find and subscribe to the latest job's live progress without
     requiring the user to manually trigger reprocessing first."""
     return video_service.list_jobs_for_video(db, video_id)

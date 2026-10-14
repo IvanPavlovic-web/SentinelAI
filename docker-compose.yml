@@ -44,6 +44,7 @@ services:
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-40}
     volumes:
       - uploads_data:/app/uploads
+      - model_cache:/root/.cache
     ports:
       - "8000:8000"
     depends_on:
@@ -78,6 +79,7 @@ services:
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-40}
     volumes:
       - uploads_data:/app/uploads
+      - model_cache:/root/.cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,14 +91,14 @@ services:
     # video-processing task itself spawns a ProcessPoolExecutor to
     # parallelize frame/inference work across chunks, and CPython refuses
     # to let a daemonic process (which is what prefork pool workers are)
-    # spawn children of its own — that combination fails immediately with
+    # spawn children of its own, and that combination fails immediately with
     # "daemonic processes are not allowed to have children". Threads don't
     # have that restriction. (--max-tasks-per-child is prefork-only and
     # dropped accordingly; worker memory is bounded by each task's own
     # ProcessPoolExecutor exiting its subprocesses when done.)
     command: >
       celery -A app.workers.celery_app worker --loglevel=info --pool=threads
-      --concurrency=${CELERY_WORKER_CONCURRENCY:-4}
+      --concurrency=${CELERY_WORKER_CONCURRENCY:-8}
 
   frontend:
     build:
@@ -131,3 +133,8 @@ services:
 volumes:
   postgres_data:
   uploads_data:
+  # Caches downloaded model weights (ultralytics COCO weights, and the
+  # Hugging Face weapon-detection model -- see backend/app/workers/
+  # detection.py) across container restarts, so they aren't re-fetched
+  # from the network every time.
+  model_cache:

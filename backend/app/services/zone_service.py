@@ -59,10 +59,12 @@ def delete_zone(db: Session, zone_id: int) -> None:
     db.commit()
 
 
-def list_rules(db: Session, zone_id: int | None = None) -> list[Rule]:
+def list_rules(db: Session, zone_id: int | None = None, camera_id: int | None = None) -> list[Rule]:
     query = db.query(Rule)
     if zone_id is not None:
         query = query.filter(Rule.zone_id == zone_id)
+    if camera_id is not None:
+        query = query.join(Zone, Rule.zone_id == Zone.id).filter(Zone.camera_id == camera_id)
     return query.order_by(Rule.created_at.desc()).all()
 
 

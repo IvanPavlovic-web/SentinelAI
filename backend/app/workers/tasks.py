@@ -1,297 +1,69 @@
-"""Celery task(s) implementing the SentinelAI video-processing pipeline.
+"""Celery tasks implementing the SentinelAI video-intelligence pipeline.
 
-Pipeline, per video:
-  1. Open the video with OpenCV, read fps/width/height/duration, persist to
-     video_sources, mark the processing_job as PROCESSING.
-  2. Split the video's duration into chunks (algorithms.split_video_chunks)
-     and farm frame-sampling + YOLO inference for each chunk out to a
-     ProcessPoolExecutor, so CPU-bound inference runs in parallel processes
-     instead of blocking the single Celery worker thread. Each worker
-     process only returns plain-data detections (no DB/cv2 handles cross
-     process boundaries) which keeps IPC simple and picklable.
-  3. Back in the main task process, replay the per-chunk detections in
-     timestamp order through a CentroidIoUTracker to assign stable track
-     IDs, and persist tracked_objects / object_observations.
-  4. For each observation, evaluate the active zones/rules for that
-     camera: compute zone severity/dwell, motion anomaly (via the track's
-     recent centroid history), after-hours flag, and confidence history,
-     then run calculate_star_risk + is_incident_triggered. When an
-     incident is triggered the first time for a track, create an
-     Incident + annotated-frame IncidentEvidence.
-  5. Record a PerformanceMetric row (frame counts, fps, latency
-     percentiles via numpy, CPU/RAM via psutil, queue wait, incident
-     count) and mark the job COMPLETED (or FAILED on error).
+Two entry points, sharing one detection/tracking/scoring/narration core
+(app/workers/detection.py, tracking_pipeline.py, annotate.py, events.py):
 
-YOLO availability: this module tries `from ultralytics import YOLO` and
-loads `settings.YOLO_MODEL_PATH` (default yolov8n.pt). In this sandboxed/
-offline environment the weights usually cannot be downloaded, so any
-failure to import ultralytics or load weights is caught and the pipeline
-falls back to `_stub_detect`, a deterministic synthetic-detection
-generator, so the end-to-end pipeline (tracking, zones, STAR-Risk,
-incidents, metrics) still runs and is demoable without GPU/internet.
+- process_video_task(job_id): an uploaded file, known duration, processed
+  in parallel chunks, producing a batch annotated-preview video at the end.
+- process_live_camera_task(job_id): a camera's live stream (RTSP, or any
+  source cv2.VideoCapture can open), processed frame by frame in real time
+  for a bounded session length, continuously refreshing a snapshot preview
+  image and re-queuing itself while the camera is still meant to be live.
+
+YOLO availability: both paths try `from ultralytics import YOLO` via
+app.workers.detection.load_yolo_model, and fall back to a deterministic
+synthetic-detection stub if the weights cannot be loaded (e.g. an offline
+sandboxed environment), so the rest of the pipeline (tracking, zones,
+Risk, incidents, narration, metrics) still runs end to end.
+
+Weapon detection: COCO (the default YOLO_MODEL_PATH) has no gun/knife
+classes, so both paths also load a second, dedicated weapon-detection
+model (app.workers.detection.load_weapon_model) and run it alongside the
+main model on every sampled frame. Unavailable (no internet, etc.) simply
+means no weapon detections for that session, same graceful-degradation
+approach as the stub detector.
 """
 from __future__ import annotations
 
 import time
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import psutil
 
-from app.algorithms.star_risk import (
-    calculate_motion_anomaly,
-    calculate_star_risk,
-    is_incident_triggered,
-    split_video_chunks,
-)
+from app.algorithms.risk import split_video_chunks
 from app.algorithms.tracker import CentroidIoUTracker, Detection
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.redis_client import get_redis
 from app.db.base import SessionLocal
-from app.models.camera import JobStatus, ProcessingJob, VideoSource
-from app.models.incident import Incident, IncidentEvidence, IncidentPriority, PerformanceMetric
-from app.models.tracking import ActivityEvent, EventSeverity, ObjectObservation, TrackedObject
-from app.models.zone import Rule, Zone
+from app.models.camera import Camera, JobStatus, ProcessingJob, VideoSource
+from app.models.incident import PerformanceMetric
+from app.workers.annotate import render_annotated_video, write_live_snapshot
 from app.workers.celery_app import celery_app
-from app.workers.events import ActivityEventGenerator
-from app.workers.visual_attributes import frame_position_label, movement_label
+from app.workers.detection import RawDetection, detect_frame, load_weapon_model, load_yolo_model, process_chunk
+from app.workers.tracking_pipeline import (
+    TrackingState,
+    associate_weapons_to_people,
+    clear_live_tracking_state,
+    handle_tracked_detection,
+    load_live_tracking_state,
+    load_zones_and_rules,
+    save_live_tracking_state,
+)
 
 logger = get_logger(__name__)
-
-COCO_RELEVANT_CLASSES = {0: "person", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
-
-
-@dataclass
-class RawDetection:
-    frame_number: int
-    timestamp: float
-    x1: float
-    y1: float
-    x2: float
-    y2: float
-    confidence: float
-    object_class: str
-    dominant_color: str = "unknown"
-
-
-def _load_yolo_model():
-    try:
-        from ultralytics import YOLO  # noqa: PLC0415
-
-        model = YOLO(settings.YOLO_MODEL_PATH)
-        return model, False
-    except Exception as exc:  # noqa: BLE001 - any failure (offline, missing deps) -> stub mode
-        logger.warning("YOLO unavailable (%s); falling back to synthetic-detection stub mode.", exc)
-        return None, True
-
-
-def _stub_detect(frame, frame_number: int, timestamp: float) -> list[RawDetection]:
-    """Deterministic synthetic detector used when ultralytics/YOLO weights
-    are unavailable (e.g. offline grading environment). Produces a single
-    slowly-moving "person" bounding box so the rest of the pipeline
-    (tracking, zone/rule evaluation, STAR-Risk, incidents) has real data
-    to operate on."""
-    height, width = frame.shape[:2] if frame is not None else (480, 640)
-    # Oscillate the box across the frame over time to create motion history.
-    t = timestamp
-    cx = (width * 0.5) + (width * 0.25) * np.sin(t / 5.0)
-    cy = height * 0.5
-    box_w, box_h = width * 0.1, height * 0.3
-    x1, y1 = max(0.0, cx - box_w / 2), max(0.0, cy - box_h / 2)
-    x2, y2 = min(float(width), cx + box_w / 2), min(float(height), cy + box_h / 2)
-    confidence = 0.75 + 0.2 * abs(np.sin(t / 3.0))
-    from app.workers.visual_attributes import classify_dominant_color  # noqa: PLC0415
-
-    return [
-        RawDetection(
-            frame_number=frame_number,
-            timestamp=timestamp,
-            x1=float(x1),
-            y1=float(y1),
-            x2=float(x2),
-            y2=float(y2),
-            confidence=float(min(confidence, 0.99)),
-            object_class="person",
-            dominant_color=classify_dominant_color(frame, x1, y1, x2, y2),
-        )
-    ]
-
-
-def _process_chunk(
-    file_path: str,
-    start_seconds: float,
-    end_seconds: float,
-    fps: float,
-    sample_rate: int,
-    model_path: str,
-) -> list[dict]:
-    """Runs in a worker process (ProcessPoolExecutor). Opens its own
-    cv2.VideoCapture handle, samples frames within [start, end), runs YOLO
-    (or the stub) per sampled frame, and returns plain dicts (picklable)."""
-    import cv2  # local import: only needed in worker processes
-
-    model, is_stub = (None, True)
-    if model_path:
-        try:
-            from ultralytics import YOLO  # noqa: PLC0415
-
-            model = YOLO(model_path)
-            is_stub = False
-        except Exception:  # noqa: BLE001
-            model, is_stub = None, True
-
-    cap = cv2.VideoCapture(file_path)
-    start_frame = int(start_seconds * fps)
-    end_frame = int(end_seconds * fps)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-    results: list[dict] = []
-    frame_number = start_frame
-    while frame_number < end_frame:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if (frame_number - start_frame) % sample_rate == 0:
-            timestamp = frame_number / fps if fps > 0 else frame_number
-            if is_stub or model is None:
-                detections = _stub_detect(frame, frame_number, timestamp)
-            else:
-                detections = []
-                try:
-                    pred = model(frame, verbose=False)[0]
-                    for box in pred.boxes:
-                        cls_id = int(box.cls[0])
-                        if cls_id not in COCO_RELEVANT_CLASSES:
-                            continue
-                        x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
-                        conf = float(box.conf[0])
-                        from app.workers.visual_attributes import classify_dominant_color  # noqa: PLC0415
-
-                        detections.append(
-                            RawDetection(
-                                frame_number=frame_number,
-                                timestamp=timestamp,
-                                x1=x1, y1=y1, x2=x2, y2=y2,
-                                confidence=conf,
-                                object_class=COCO_RELEVANT_CLASSES[cls_id],
-                                dominant_color=classify_dominant_color(frame, x1, y1, x2, y2),
-                            )
-                        )
-                except Exception:  # noqa: BLE001 - inference failure -> fall back for this frame
-                    detections = _stub_detect(frame, frame_number, timestamp)
-
-            # Save one annotated-ish frame per chunk for potential evidence use.
-            if frame_number == start_frame:
-                evidence_dir = Path(settings.UPLOAD_DIR) / "evidence"
-                evidence_dir.mkdir(parents=True, exist_ok=True)
-                evidence_path = evidence_dir / f"chunk_{start_frame}.jpg"
-                try:
-                    cv2.imwrite(str(evidence_path), frame)
-                except Exception:  # noqa: BLE001
-                    evidence_path = None
-            results.extend(asdict(d) for d in detections)
-        frame_number += 1
-
-    cap.release()
-    return results
-
-
-def _render_annotated_video(
-    source_path: str,
-    output_path: Path,
-    annotations_by_frame: dict[int, list[dict]],
-    fps: float,
-    width: int,
-    height: int,
-    hold_frames: int,
-) -> bool:
-    """Re-renders the source video with detection boxes, track IDs,
-    confidence and STAR-Risk burned in — this is what the Video Detail
-    preview shows so a person can see exactly what the AI found, not just
-    a status percentage. Boxes persist for `hold_frames` frames after their
-    last sampled detection (= FRAME_SAMPLE_RATE) so playback doesn't flicker
-    between the frames that were actually sampled for inference. Returns
-    False on any failure (e.g. no video codec available in this
-    environment) so the caller can skip the annotated preview without
-    failing the whole processing job over a cosmetic feature."""
-    import cv2  # local import: this runs in the main task process/thread
-
-    try:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        cap = cv2.VideoCapture(source_path)
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(output_path), fourcc, fps if fps > 0 else 25.0, (width, height))
-        if not cap.isOpened() or not writer.isOpened():
-            cap.release()
-            writer.release()
-            return False
-    except Exception:  # noqa: BLE001
-        return False
-
-    active: dict[int, tuple[dict, int]] = {}  # track_id -> (box, expires_at_frame)
-    frame_idx = 0
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-
-            for box in annotations_by_frame.get(frame_idx, []):
-                active[box["track_id"]] = (box, frame_idx + hold_frames)
-            for track_id in [tid for tid, (_, expiry) in active.items() if expiry < frame_idx]:
-                del active[track_id]
-
-            for box, _ in active.values():
-                x1, y1, x2, y2 = int(box["x1"]), int(box["y1"]), int(box["x2"]), int(box["y2"])
-                color_prefix = f"{box['color']} " if box.get("color", "unknown") != "unknown" else ""
-                label = f"{color_prefix}{box['object_class']} #{box['track_id']} {box['confidence'] * 100:.0f}% risk:{box['risk']:.0f}"
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
-                text_y = max(y1 - 8, 14)
-                # Black outline then white fill so the label reads on any background.
-                cv2.putText(frame, label, (x1 + 1, text_y + 1), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
-                cv2.putText(frame, label, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-
-            writer.write(frame)
-            frame_idx += 1
-    finally:
-        cap.release()
-        writer.release()
-
-    return frame_idx > 0
-
-
-def _after_hours(ts: datetime) -> bool:
-    return ts.hour >= 22 or ts.hour < 6
-
-
-def _zone_contains_point(polygon: list[tuple[float, float]], point: tuple[float, float]) -> bool:
-    """Standard ray-casting point-in-polygon test (normalized coordinates)."""
-    x, y = point
-    inside = False
-    n = len(polygon)
-    j = n - 1
-    for i in range(n):
-        xi, yi = polygon[i]
-        xj, yj = polygon[j]
-        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi):
-            inside = not inside
-        j = i
-    return inside
 
 
 @celery_app.task(bind=True, name="app.workers.tasks.process_video_task")
 def process_video_task(self, job_id: int) -> dict:
-    import json
-
     import cv2
 
     db = SessionLocal()
     start_time = time.time()
     latencies_ms: list[float] = []
-    incident_count = 0
 
     try:
         job: ProcessingJob | None = db.get(ProcessingJob, job_id)
@@ -320,12 +92,12 @@ def process_video_task(self, job_id: int) -> dict:
         db.commit()
 
         chunks = split_video_chunks(max(duration, 1.0), settings.DEFAULT_CHUNK_SECONDS)
-
         all_detections: list[RawDetection] = []
         total = len(chunks)
+
         # Celery's default "prefork" pool runs each task inside a daemonic
         # worker process, and CPython forbids a daemonic process from
-        # spawning children — so ProcessPoolExecutor.submit() raises
+        # spawning children, so ProcessPoolExecutor.submit() raises
         # AssertionError there even though the code itself is correct (see
         # docker-compose.yml, which runs celery_worker with --pool=threads
         # specifically to avoid this). If some other deployment still runs
@@ -334,15 +106,7 @@ def process_video_task(self, job_id: int) -> dict:
         try:
             with ProcessPoolExecutor(max_workers=min(4, max(1, total))) as executor:
                 futures = [
-                    executor.submit(
-                        _process_chunk,
-                        video.file_path,
-                        start,
-                        end,
-                        fps,
-                        settings.FRAME_SAMPLE_RATE,
-                        settings.YOLO_MODEL_PATH,
-                    )
+                    executor.submit(process_chunk, video.file_path, start, end, fps, settings.FRAME_SAMPLE_RATE, settings.YOLO_MODEL_PATH)
                     for start, end in chunks
                 ]
                 for i, future in enumerate(futures):
@@ -354,17 +118,14 @@ def process_video_task(self, job_id: int) -> dict:
                     db.commit()
         except (AssertionError, OSError) as exc:
             logger.warning(
-                "ProcessPoolExecutor unavailable (%s); falling back to sequential "
-                "chunk processing. Run the celery worker with --pool=threads to "
-                "get real parallel chunk processing.",
+                "ProcessPoolExecutor unavailable (%s); falling back to sequential chunk processing. "
+                "Run the celery worker with --pool=threads to get real parallel chunk processing.",
                 exc,
             )
             all_detections = []
             for i, (start, end) in enumerate(chunks):
                 t0 = time.time()
-                chunk_results = _process_chunk(
-                    video.file_path, start, end, fps, settings.FRAME_SAMPLE_RATE, settings.YOLO_MODEL_PATH
-                )
+                chunk_results = process_chunk(video.file_path, start, end, fps, settings.FRAME_SAMPLE_RATE, settings.YOLO_MODEL_PATH)
                 latencies_ms.append((time.time() - t0) * 1000)
                 all_detections.extend(RawDetection(**d) for d in chunk_results)
                 job.progress_percent = round(((i + 1) / total) * 90.0, 2)
@@ -372,198 +133,40 @@ def process_video_task(self, job_id: int) -> dict:
 
         all_detections.sort(key=lambda d: d.timestamp)
 
-        # Replay through the tracker in temporal order.
         tracker = CentroidIoUTracker()
-        track_db_ids: dict[int, int] = {}  # tracker track_id -> TrackedObject.id
-        track_rule_triggered: set[int] = set()
-        event_generator = ActivityEventGenerator()
-
-        zones = db.query(Zone).filter(Zone.camera_id == video.camera_id, Zone.is_active.is_(True)).all() if video.camera_id else []
-        zone_polygons = {z.id: (z, [tuple(p) for p in json.loads(z.polygon_json)]) for z in zones}
-        rules_by_zone: dict[int, list[Rule]] = {}
-        for z in zones:
-            rules_by_zone[z.id] = db.query(Rule).filter(Rule.zone_id == z.id, Rule.is_active.is_(True)).all()
-
-        risk_history_by_track: dict[int, list[float]] = {}
-        first_seen_by_track: dict[int, float] = {}
-        # Collected for _render_annotated_video, keyed by frame number.
+        state = TrackingState()
+        zone_polygons, rules_by_zone = load_zones_and_rules(db, video.camera_id)
         annotations_by_frame: dict[int, list[dict]] = {}
 
-        # Group detections by frame/timestamp for the tracker's frame-by-frame update.
         by_timestamp: dict[float, list[RawDetection]] = {}
         for d in all_detections:
             by_timestamp.setdefault(d.timestamp, []).append(d)
 
         for ts in sorted(by_timestamp.keys()):
             dets = [
-                Detection(
-                    x1=d.x1, y1=d.y1, x2=d.x2, y2=d.y2,
-                    confidence=d.confidence, object_class=d.object_class, dominant_color=d.dominant_color,
-                )
+                Detection(x1=d.x1, y1=d.y1, x2=d.x2, y2=d.y2, confidence=d.confidence, object_class=d.object_class, dominant_color=d.dominant_color)
                 for d in by_timestamp[ts]
             ]
             matches = tracker.update(dets, ts)
+            class_counts = {cls: sum(1 for t in tracker.tracks.values() if t.active and t.object_class == cls) for cls in {d.object_class for d in dets}}
+            weapon_holders = associate_weapons_to_people(tracker, matches, width, height)
 
             for track_id, det in matches.items():
                 track = tracker.tracks[track_id]
-                if track_id not in track_db_ids:
-                    tracked_obj = TrackedObject(
-                        processing_job_id=job.id,
-                        track_number=track_id,
-                        object_class=det.object_class,
-                    )
-                    db.add(tracked_obj)
-                    db.commit()
-                    db.refresh(tracked_obj)
-                    track_db_ids[track_id] = tracked_obj.id
-                    first_seen_by_track[track_id] = ts
-                    risk_history_by_track[track_id] = []
-
-                centroid = det.centroid
-                matched_zone_id = None
-                matched_zone = None
-                for zid, (zone_obj, polygon) in zone_polygons.items():
-                    norm_point = (centroid[0] / max(width, 1), centroid[1] / max(height, 1))
-                    if _zone_contains_point(polygon, norm_point):
-                        matched_zone_id = zid
-                        matched_zone = zone_obj
-                        break
-
-                dwell_seconds = ts - first_seen_by_track[track_id]
-                motion_anomaly = calculate_motion_anomaly(track.centroids, track.timestamps)
-                observed_dt = datetime.now(timezone.utc)
-                after_hours = _after_hours(observed_dt)
-
-                risk = calculate_star_risk(
-                    zone_severity=matched_zone.severity.value if matched_zone else None,
-                    dwell_seconds=dwell_seconds,
-                    minimum_dwell_seconds=matched_zone.minimum_dwell_seconds if matched_zone else 10.0,
-                    motion_anomaly=motion_anomaly,
-                    after_hours=after_hours,
-                    confidence_history=track.confidences,
-                    previous_risk=risk_history_by_track[track_id][-1] if risk_history_by_track[track_id] else 0.0,
-                )
-                risk_history_by_track[track_id].append(risk)
-
                 frame_number = int(ts * fps)
+                risk = handle_tracked_detection(
+                    db, job, video.camera_id, zone_polygons, rules_by_zone,
+                    det, track, track_id, ts, frame_number, width, height, state,
+                    concurrent_count=class_counts.get(det.object_class),
+                    holder_person_track_id=weapon_holders.get(track_id),
+                )
                 annotations_by_frame.setdefault(frame_number, []).append(
                     {
                         "x1": det.x1, "y1": det.y1, "x2": det.x2, "y2": det.y2,
-                        "object_class": det.object_class,
-                        "track_id": track_id,
-                        "confidence": det.confidence,
-                        "risk": risk,
-                        "color": track.dominant_color,
+                        "object_class": det.object_class, "track_id": track_id,
+                        "confidence": det.confidence, "risk": risk, "color": track.dominant_color,
                     }
                 )
-
-                observation = ObjectObservation(
-                    tracked_object_id=track_db_ids[track_id],
-                    frame_number=frame_number,
-                    timestamp_seconds=ts,
-                    bbox_x1=det.x1, bbox_y1=det.y1, bbox_x2=det.x2, bbox_y2=det.y2,
-                    confidence=det.confidence,
-                    centroid_x=centroid[0], centroid_y=centroid[1],
-                    zone_id=matched_zone_id,
-                    star_risk_score=risk,
-                )
-                db.add(observation)
-
-                tracked_obj_row = db.get(TrackedObject, track_db_ids[track_id])
-                tracked_obj_row.final_risk_score = risk
-                tracked_obj_row.dominant_color = track.dominant_color
-                db.commit()
-
-                position = frame_position_label(centroid[0], centroid[1], width, height)
-                movement = movement_label(track.centroids, track.timestamps)
-                for event_type, severity, description in event_generator.observe(
-                    track_id,
-                    det.object_class,
-                    risk,
-                    motion_anomaly,
-                    ts,
-                    dominant_color=track.dominant_color,
-                    position=position,
-                    movement=movement,
-                ):
-                    db.add(
-                        ActivityEvent(
-                            processing_job_id=job.id,
-                            tracked_object_id=track_db_ids[track_id],
-                            track_number=track_id,
-                            object_class=det.object_class,
-                            timestamp_seconds=ts,
-                            event_type=event_type,
-                            severity=EventSeverity(severity),
-                            description=description,
-                            risk_score=risk,
-                        )
-                    )
-                    db.commit()
-
-                if matched_zone_id is not None and track_id not in track_rule_triggered:
-                    for rule in rules_by_zone.get(matched_zone_id, []):
-                        allowed_classes = [c.strip() for c in rule.object_classes.split(",")]
-                        if det.object_class not in allowed_classes:
-                            continue
-                        if rule.after_hours_only and not after_hours:
-                            continue
-                        triggered = is_incident_triggered(
-                            risk_history_by_track[track_id],
-                            rule.risk_threshold,
-                            rule.consecutive_required,
-                        )
-                        if triggered:
-                            track_rule_triggered.add(track_id)
-                            priority = (
-                                IncidentPriority.CRITICAL if risk >= 90
-                                else IncidentPriority.HIGH if risk >= 75
-                                else IncidentPriority.MEDIUM if risk >= 50
-                                else IncidentPriority.LOW
-                            )
-                            incident = Incident(
-                                processing_job_id=job.id,
-                                camera_id=video.camera_id,
-                                zone_id=matched_zone_id,
-                                tracked_object_id=track_db_ids[track_id],
-                                rule_id=rule.id,
-                                object_class=det.object_class,
-                                star_risk_score=risk,
-                                priority=priority,
-                                summary=(
-                                    f"{det.object_class.capitalize()} track #{track_id} triggered rule "
-                                    f"'{rule.name}' in zone '{matched_zone.name}' with STAR-Risk {risk:.1f}."
-                                ),
-                            )
-                            db.add(incident)
-                            db.commit()
-                            db.refresh(incident)
-                            incident_count += 1
-
-                            evidence_dir = Path(settings.UPLOAD_DIR) / "evidence"
-                            evidence_dir.mkdir(parents=True, exist_ok=True)
-                            evidence_path = evidence_dir / f"incident_{incident.id}.jpg"
-                            try:
-                                frame_img = np.zeros((height, width, 3), dtype=np.uint8)
-                                cv2.rectangle(
-                                    frame_img,
-                                    (int(det.x1), int(det.y1)),
-                                    (int(det.x2), int(det.y2)),
-                                    (0, 0, 255),
-                                    3,
-                                )
-                                cv2.imwrite(str(evidence_path), frame_img)
-                                db.add(
-                                    IncidentEvidence(
-                                        incident_id=incident.id,
-                                        frame_path=str(evidence_path),
-                                        timestamp_seconds=ts,
-                                    )
-                                )
-                                db.commit()
-                            except Exception as exc:  # noqa: BLE001
-                                logger.warning("Could not write evidence frame: %s", exc)
-                            break
 
         job.progress_percent = 95.0
         db.commit()
@@ -571,9 +174,7 @@ def process_video_task(self, job_id: int) -> dict:
         annotated_path = Path(settings.UPLOAD_DIR) / "annotated" / f"job_{job.id}.mp4"
         hold_frames = max(int(settings.FRAME_SAMPLE_RATE), 1)
         try:
-            rendered = _render_annotated_video(
-                video.file_path, annotated_path, annotations_by_frame, fps, width, height, hold_frames
-            )
+            rendered = render_annotated_video(video.file_path, annotated_path, annotations_by_frame, fps, width, height, hold_frames)
         except Exception as exc:  # noqa: BLE001 - annotated preview is best-effort, never fails the job
             logger.warning("Annotated preview rendering raised for job %s: %s", job.id, exc)
             rendered = False
@@ -585,27 +186,28 @@ def process_video_task(self, job_id: int) -> dict:
 
         elapsed = time.time() - start_time
         latencies = np.array(latencies_ms) if latencies_ms else np.array([0.0])
-        metric = PerformanceMetric(
-            processing_job_id=job.id,
-            total_frames=frame_count,
-            processed_frames=len(all_detections),
-            duration_seconds=elapsed,
-            processing_fps=(len(all_detections) / elapsed) if elapsed > 0 else 0.0,
-            avg_latency_ms=float(np.mean(latencies)),
-            p95_latency_ms=float(np.percentile(latencies, 95)),
-            avg_cpu_percent=psutil.cpu_percent(interval=0.1),
-            avg_ram_mb=psutil.Process().memory_info().rss / (1024 * 1024),
-            queue_wait_seconds=(job.started_at - job.created_at).total_seconds() if job.started_at and job.created_at else 0.0,
-            incident_count=incident_count,
+        db.add(
+            PerformanceMetric(
+                processing_job_id=job.id,
+                total_frames=frame_count,
+                processed_frames=len(all_detections),
+                duration_seconds=elapsed,
+                processing_fps=(len(all_detections) / elapsed) if elapsed > 0 else 0.0,
+                avg_latency_ms=float(np.mean(latencies)),
+                p95_latency_ms=float(np.percentile(latencies, 95)),
+                avg_cpu_percent=psutil.cpu_percent(interval=0.1),
+                avg_ram_mb=psutil.Process().memory_info().rss / (1024 * 1024),
+                queue_wait_seconds=(job.started_at - job.created_at).total_seconds() if job.started_at and job.created_at else 0.0,
+                incident_count=state.incident_count,
+            )
         )
-        db.add(metric)
 
         job.status = JobStatus.COMPLETED
         job.progress_percent = 100.0
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
 
-        return {"status": "completed", "job_id": job.id, "incidents": incident_count}
+        return {"status": "completed", "job_id": job.id, "incidents": state.incident_count}
 
     except Exception as exc:  # noqa: BLE001
         logger.exception("process_video_task failed for job %s", job_id)
@@ -616,6 +218,222 @@ def process_video_task(self, job_id: int) -> dict:
             job.error_message = str(exc)
             job.finished_at = datetime.now(timezone.utc)
             db.commit()
+        return {"status": "error", "detail": str(exc)}
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, name="app.workers.tasks.process_live_camera_task")
+def process_live_camera_task(self, job_id: int) -> dict:
+    """Processes a camera's live stream in real time for up to
+    LIVE_SESSION_MAX_SECONDS, then (if the camera is still active and no
+    stop was requested) re-queues itself to keep monitoring continuously.
+    Tracking state (track IDs, risk history, event-narration history) is
+    persisted to Redis (app.workers.tracking_pipeline save/load/clear_
+    live_tracking_state) and restored by the next re-queued invocation, so
+    a continuously-monitored camera keeps stable track IDs across that
+    boundary instead of restarting dwell/risk history every
+    LIVE_SESSION_MAX_SECONDS."""
+    import cv2
+
+    db = SessionLocal()
+    redis_client = get_redis()
+    start_time = time.time()
+    frames_processed = 0
+    latencies_ms: list[float] = []
+
+    try:
+        job: ProcessingJob | None = db.get(ProcessingJob, job_id)
+        if job is None:
+            logger.error("ProcessingJob %s not found", job_id)
+            return {"status": "error", "detail": "job not found"}
+
+        camera: Camera | None = db.get(Camera, job.camera_id)
+        if camera is None or not camera.rtsp_url:
+            job.status = JobStatus.FAILED
+            job.error_message = "Camera has no stream URL configured"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            clear_live_tracking_state(redis_client, job.id)
+            return {"status": "error", "detail": "no stream URL"}
+
+        job.status = JobStatus.PROCESSING
+        job.started_at = job.started_at or datetime.now(timezone.utc)
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        cap = cv2.VideoCapture(camera.rtsp_url)
+        if not cap.isOpened():
+            job.status = JobStatus.FAILED
+            job.error_message = f"Could not connect to camera stream: {camera.rtsp_url}"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            clear_live_tracking_state(redis_client, job.id)
+            return {"status": "error", "detail": "camera unreachable"}
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 15.0  # many RTSP sources misreport fps; a sane default keeps timestamps usable
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
+        model, is_stub = load_yolo_model(settings.YOLO_MODEL_PATH)
+        weapon_model = (
+            load_weapon_model(settings.WEAPON_MODEL_REPO_ID, settings.WEAPON_MODEL_FILENAME, settings.WEAPON_MODEL_REPO_TYPE)
+            if settings.WEAPON_MODEL_ENABLED
+            else None
+        )
+
+        tracker, state = load_live_tracking_state(redis_client, job.id)
+        if tracker is None or state is None:
+            tracker = CentroidIoUTracker()
+            state = TrackingState()
+        zone_polygons, rules_by_zone = load_zones_and_rules(db, camera.id)
+        snapshot_path = Path(settings.UPLOAD_DIR) / "live" / f"camera_{camera.id}_latest.jpg"
+
+        frame_number = 0
+        session_deadline = start_time + settings.LIVE_SESSION_MAX_SECONDS
+        last_db_check = 0.0
+        last_processed_frame = None
+
+        while time.time() < session_deadline:
+            ok, frame = cap.read()
+            if not ok:
+                # A continuous stream (RTSP) exhausting itself here is
+                # usually a real disconnect. But plenty of real-world
+                # public cameras -- including every one of the BiH demo
+                # cameras seeded by app/seed.py -- aren't a continuous
+                # stream at all, just a single refreshed JPEG served per
+                # HTTP request: cv2.VideoCapture reads that one frame
+                # successfully, then legitimately reports EOF on every
+                # read after. Reopening the capture and retrying once
+                # handles both cases: a snapshot-style source gets its
+                # next refreshed frame, and a flaky RTSP source gets a
+                # reconnect attempt, before this session is given up on.
+                cap.release()
+                cap = cv2.VideoCapture(camera.rtsp_url)
+                ok, frame = cap.read()
+                if not ok:
+                    logger.warning("Live camera %s: stream read failed even after reconnect, ending this session early", camera.id)
+                    break
+                time.sleep(1.0)  # be polite to snapshot-style HTTP sources instead of hammering them
+
+            now = time.time()
+            if now - last_db_check > 2.0:  # poll for a stop request every ~2s, not every frame
+                db.refresh(job)
+                if job.stop_requested:
+                    break
+                last_db_check = now
+
+            if frame_number % max(settings.FRAME_SAMPLE_RATE, 1) == 0:
+                # Snapshot-style public webcams (see the reconnect comment
+                # above) only actually refresh every so often; in between
+                # refreshes, every read here returns the exact same image.
+                # Running detection/tracking on that repeatedly isn't just
+                # wasted CPU -- it's actively wrong: the tracker would see
+                # the same object "still there" on every poll and keep
+                # accumulating dwell_seconds against real wall-clock time,
+                # inflating risk for an object that (as far as this camera
+                # can tell) hasn't actually been continuously present, just
+                # photographed once. Skipping unchanged frames keeps dwell
+                # tied to real elapsed presence instead of polling interval.
+                unchanged = (
+                    last_processed_frame is not None
+                    and frame.shape == last_processed_frame.shape
+                    and bool(np.array_equal(frame, last_processed_frame))
+                )
+                if not unchanged:
+                    last_processed_frame = frame.copy()
+                    ts = now - start_time
+                    t0 = time.time()
+                    detections = detect_frame(model, is_stub, frame, frame_number, ts, weapon_model=weapon_model)
+                    latencies_ms.append((time.time() - t0) * 1000)
+                    frames_processed += 1
+
+                    live_dets = [
+                        Detection(x1=d.x1, y1=d.y1, x2=d.x2, y2=d.y2, confidence=d.confidence, object_class=d.object_class, dominant_color=d.dominant_color)
+                        for d in detections
+                    ]
+                    matches = tracker.update(live_dets, ts)
+                    class_counts = {cls: sum(1 for t in tracker.tracks.values() if t.active and t.object_class == cls) for cls in {d.object_class for d in live_dets}}
+                    weapon_holders = associate_weapons_to_people(tracker, matches, width, height)
+
+                    boxes_for_snapshot: list[dict] = []
+                    for track_id, det in matches.items():
+                        track = tracker.tracks[track_id]
+                        risk = handle_tracked_detection(
+                            db, job, camera.id, zone_polygons, rules_by_zone,
+                            det, track, track_id, ts, frame_number, width, height, state,
+                            live_frame=frame, concurrent_count=class_counts.get(det.object_class),
+                            holder_person_track_id=weapon_holders.get(track_id),
+                        )
+                        boxes_for_snapshot.append(
+                            {
+                                "x1": det.x1, "y1": det.y1, "x2": det.x2, "y2": det.y2,
+                                "object_class": det.object_class, "track_id": track_id,
+                                "confidence": det.confidence, "risk": risk, "color": track.dominant_color,
+                            }
+                        )
+
+                    write_live_snapshot(frame, boxes_for_snapshot, snapshot_path)
+                    job.progress_percent = 100.0  # a live session has no fixed end; 100 just means "actively monitoring"
+                    db.commit()
+
+            frame_number += 1
+
+        cap.release()
+
+        elapsed = time.time() - start_time
+        latencies = np.array(latencies_ms) if latencies_ms else np.array([0.0])
+        db.add(
+            PerformanceMetric(
+                processing_job_id=job.id,
+                total_frames=frame_number,
+                processed_frames=frames_processed,
+                duration_seconds=elapsed,
+                processing_fps=(frames_processed / elapsed) if elapsed > 0 else 0.0,
+                avg_latency_ms=float(np.mean(latencies)),
+                p95_latency_ms=float(np.percentile(latencies, 95)),
+                avg_cpu_percent=psutil.cpu_percent(interval=0.1),
+                avg_ram_mb=psutil.Process().memory_info().rss / (1024 * 1024),
+                queue_wait_seconds=0.0,
+                incident_count=state.incident_count,
+            )
+        )
+        db.commit()
+
+        db.refresh(job)
+        if job.stop_requested:
+            clear_live_tracking_state(redis_client, job.id)
+            job.status = JobStatus.STOPPED
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return {"status": "stopped", "job_id": job.id}
+
+        db.refresh(camera)
+        if camera.is_active:
+            # Still meant to be live: hand off to a fresh invocation rather
+            # than looping forever in one task (keeps worker slots healthy,
+            # lets Celery's own restart/retry machinery apply normally).
+            # Tracker/state are saved first so that next invocation picks
+            # up the same track IDs and risk history instead of resetting.
+            save_live_tracking_state(redis_client, job.id, tracker, state)
+            process_live_camera_task.delay(job.id)
+            return {"status": "continuing", "job_id": job.id}
+
+        clear_live_tracking_state(redis_client, job.id)
+        job.status = JobStatus.COMPLETED
+        job.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"status": "completed", "job_id": job.id}
+
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("process_live_camera_task failed for job %s", job_id)
+        db.rollback()
+        job = db.get(ProcessingJob, job_id)
+        if job:
+            job.status = JobStatus.FAILED
+            job.error_message = str(exc)
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            clear_live_tracking_state(redis_client, job.id)
         return {"status": "error", "detail": str(exc)}
     finally:
         db.close()

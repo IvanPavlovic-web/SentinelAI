@@ -12,6 +12,7 @@ celery==5.4.0
 redis==5.2.1
 opencv-python-headless==4.10.0.84
 ultralytics==8.3.49
+huggingface_hub==0.27.1
 numpy>=1.26,<3
 psutil==6.1.1
 pytest==8.3.4
@@ -19,4 +20,9 @@ httpx==0.28.1
 python-multipart==0.0.20
 websockets==14.1
 python-dotenv==1.0.1
-bcrypt==4.2.1
+# Pinned <4.1: passlib 1.7.4's bcrypt backend reads bcrypt.__about__.__version__
+# for version detection, an attribute bcrypt 4.1+ removed. passlib traps the
+# resulting AttributeError (hashing/verification still work either way), but
+# it logs a noisy warning on every single password check; 4.0.1 is the last
+# version with that attribute, so pinning here is silent and compatible.
+bcrypt==4.0.1

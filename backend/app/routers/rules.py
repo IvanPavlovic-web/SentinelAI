@@ -15,10 +15,14 @@ router = APIRouter(prefix="/api/rules", tags=["rules"])
 @router.get("", response_model=list[RuleRead])
 def list_rules(
     zone_id: int | None = None,
+    camera_id: int | None = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return zone_service.list_rules(db, zone_id)
+    """`camera_id` returns every rule across all of that camera's zones in
+    one query (a join through Zone), so a camera-detail page showing all
+    its zones' rules needs one request total instead of one per zone."""
+    return zone_service.list_rules(db, zone_id=zone_id, camera_id=camera_id)
 
 
 @router.post("", response_model=RuleRead, status_code=201)

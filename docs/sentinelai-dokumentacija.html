@@ -72,7 +72,7 @@ footer{border-top:1px solid var(--border);margin-top:3rem;padding-top:1.5rem;col
   <a href="#arhitektura">2. Arhitektura</a>
   <a href="#tok">3. Tok obrade videa</a>
   <div class="grp">Algoritam</div>
-  <a href="#starrisk">4. STAR-Risk algoritam</a>
+  <a href="#starrisk">4. Risk algoritam</a>
   <a href="#tracker">5. Tracker (praćenje objekata)</a>
   <div class="grp">Sistem</div>
   <a href="#baza">6. Baza podataka</a>
@@ -90,7 +90,7 @@ footer{border-top:1px solid var(--border);margin-top:3rem;padding-top:1.5rem;col
 <header class="hero">
   <div class="kicker">Tehnička dokumentacija · CS50P Final Project</div>
   <h1>SentinelAI</h1>
-  <p class="sub">Edge Video Intelligence &amp; Incident Detection Platform — detaljno objašnjenje arhitekture, algoritma za procenu rizika, baze podataka, API-ja i načina pokretanja celog sistema.</p>
+  <p class="sub">Edge Video Intelligence &amp; Incident Detection Platform: detaljno objašnjenje arhitekture, algoritma za procenu rizika, baze podataka, API-ja i načina pokretanja celog sistema.</p>
   <div class="badges">
     <span class="badge">FastAPI</span><span class="badge">SQLAlchemy 2.0</span><span class="badge">PostgreSQL</span>
     <span class="badge">Celery + Redis</span><span class="badge">OpenCV + YOLOv8</span><span class="badge">React + Vite + TS</span>
@@ -100,13 +100,13 @@ footer{border-top:1px solid var(--border);margin-top:3rem;padding-top:1.5rem;col
 
 <section id="uvod">
 <h2><span class="num">01</span>Uvod i problem koji se rešava</h2>
-<p>Timovi koji se bave fizičkim obezbeđenjem (magacini, gradilišta, retail objekti) imaju kamere, ali retko imaju pametnu analitiku — ili plaćaju skupe cloud VMS/AI pretplate, ili ljudi ručno gledaju zidove sa desetinama video-strimova. <strong>SentinelAI</strong> je samostalna (self-hosted) platforma koja:</p>
+<p>Timovi koji se bave fizičkim obezbeđenjem (magacini, gradilišta, retail objekti) imaju kamere, ali retko imaju pametnu analitiku: ili plaćaju skupe cloud VMS/AI pretplate, ili ljudi ručno gledaju zidove sa desetinama video-strimova. <strong>SentinelAI</strong> je samostalna (self-hosted) platforma koja:</p>
 <ul>
   <li>prima otpremljeni video snimak (nadzorna kamera ili dron),</li>
   <li>u pozadini (asinhrono) detektuje ljude i vozila pomoću YOLOv8 modela,</li>
   <li>prati svaki objekat kroz vreme sopstvenim lakim tracker-om (centroid + IoU),</li>
   <li>proverava da li je objekat ušao u definisanu sigurnosnu zonu i prekršio pravilo (npr. predugo zadržavanje, kretanje van radnog vremena),</li>
-  <li>računa objašnjiv rizik-skor (STAR-Risk, 0–100) i automatski otvara <strong>incident</strong> kada je skor dovoljno dugo iznad praga,</li>
+  <li>računa objašnjiv rizik-skor (Risk, 0–100) i automatski otvara <strong>incident</strong> kada je skor dovoljno dugo iznad praga,</li>
   <li>prikazuje sve kroz dashboard sa grafovima, listom incidenata, upravljanjem kamerama/zonama i audit logom.</li>
 </ul>
 <p>Cilj nije "još jedan detektor objekata" nego kompletan pipeline koji odgovara na pitanja poput: <em>Da li je osoba ušla u zabranjenu zonu? Da li je vozilo predugo stajalo? Da li je ponašanje bilo neuobičajeno (nagle promene pravca, ubrzanja)? Koje kamere/zone generišu najviše incidenata?</em></p>
@@ -115,32 +115,32 @@ footer{border-top:1px solid var(--border);margin-top:3rem;padding-top:1.5rem;col
 <section id="arhitektura">
 <h2><span class="num">02</span>Arhitektura sistema</h2>
 <div class="flow">
-  <div class="step">frontend (React + Vite + TS + Tailwind) — dashboard, upload, incidenti, performanse</div>
+  <div class="step">frontend (React + Vite + TS + Tailwind): dashboard, upload, incidenti, performanse</div>
   <div class="arrow">↓ HTTP (REST) i WebSocket</div>
-  <div class="step">backend (FastAPI) — rute → servisni sloj → SQLAlchemy modeli</div>
+  <div class="step">backend (FastAPI): rute → servisni sloj → SQLAlchemy modeli</div>
   <div class="arrow">↓ čita/piše</div>
-  <div class="step">PostgreSQL — 14 tabela (korisnici, kamere, video, incidenti, metrike...)</div>
+  <div class="step">PostgreSQL: 14 tabela (korisnici, kamere, video, incidenti, metrike...)</div>
   <div class="arrow">↓ zadatak se stavlja u red (enqueue)</div>
-  <div class="step">Redis — Celery broker + result backend</div>
+  <div class="step">Redis: Celery broker + result backend</div>
   <div class="arrow">↓ worker preuzima zadatak</div>
-  <div class="step">celery_worker — OpenCV čitanje frejmova → ProcessPoolExecutor (paralelni chunk-ovi) → YOLOv8 (ili stub) → tracker.py → STAR-Risk → upis u bazu + evidence frejmovi</div>
+  <div class="step">celery_worker: OpenCV čitanje frejmova → ProcessPoolExecutor (paralelni chunk-ovi) → YOLOv8 (ili stub) → tracker.py → Risk → upis u bazu + evidence frejmovi</div>
 </div>
-<p>Backend je strogo podeljen po slojevima: <code>routers/</code> (samo HTTP ulaz/izlaz), <code>services/</code> (poslovna logika), <code>models/</code> (SQLAlchemy ORM), <code>schemas/</code> (Pydantic validacija), <code>algorithms/</code> (čiste funkcije bez zavisnosti od baze — uključujući STAR-Risk i tracker), <code>workers/</code> (Celery zadaci) i <code>websocket/</code> (live ažuriranja). Rute nikad ne sadrže poslovnu logiku direktno — uvek pozivaju odgovarajući servis.</p>
-<div class="note">Ključna odluka: <code>backend/app/algorithms/star_risk.py</code> ne duplira algoritam — on uvozi tačno iste funkcije iz korenskog <code>project.py</code> (preko <code>sys.path</code>), tako da CS50-ocenjivani modul i produkcioni pipeline dele <strong>jedan</strong> izvor istine.</div>
+<p>Backend je strogo podeljen po slojevima: <code>routers/</code> (samo HTTP ulaz/izlaz), <code>services/</code> (poslovna logika), <code>models/</code> (SQLAlchemy ORM), <code>schemas/</code> (Pydantic validacija), <code>algorithms/</code> (čiste funkcije bez zavisnosti od baze: uključujući Risk i tracker), <code>workers/</code> (Celery zadaci) i <code>websocket/</code> (live ažuriranja). Rute nikad ne sadrže poslovnu logiku direktno: uvek pozivaju odgovarajući servis.</p>
+<div class="note">Ključna odluka: <code>backend/app/algorithms/risk.py</code> ne duplira algoritam: on uvozi tačno iste funkcije iz korenskog <code>project.py</code> (preko <code>sys.path</code>), tako da CS50-ocenjivani modul i produkcioni pipeline dele <strong>jedan</strong> izvor istine.</div>
 </section>
 
 <section id="tok">
-<h2><span class="num">03</span>Tok obrade jednog videa — korak po korak</h2>
+<h2><span class="num">03</span>Tok obrade jednog videa: korak po korak</h2>
 <ol>
   <li>Korisnik (uloga <code>analyst</code> ili <code>admin</code>) otpremi fajl kroz <em>Video Library</em> stranicu ili <code>POST /api/videos/upload</code>.</li>
   <li>Backend validira ekstenziju/MIME tip, generiše bezbedno ime fajla (UUID), čuva ga u <code>uploads/</code>, pravi red u <code>video_sources</code> i red u <code>processing_jobs</code> (status <code>queued</code>).</li>
   <li>Backend šalje Celery zadatak <code>process_video_task(job_id)</code> u Redis red.</li>
   <li>Worker otvara video sa <code>cv2.VideoCapture</code>, čita FPS, širinu, visinu i trajanje, upisuje ih u <code>video_sources</code>.</li>
-  <li>Trajanje se deli na "chunk"-ove pomoću <code>split_video_chunks()</code> (npr. 130s video / 30s chunk = 5 delova, poslednji 10s), a uzorkovanje frejmova + YOLO inferenca se raspodeljuju kroz <code>ProcessPoolExecutor</code> — stvarna paralelizacija po CPU jezgrima.</li>
+  <li>Trajanje se deli na "chunk"-ove pomoću <code>split_video_chunks()</code> (npr. 130s video / 30s chunk = 5 delova, poslednji 10s), a uzorkovanje frejmova + YOLO inferenca se raspodeljuju kroz <code>ProcessPoolExecutor</code>: stvarna paralelizacija po CPU jezgrima.</li>
   <li>YOLOv8 (model <code>yolov8n.pt</code>, CPU) detektuje klase <code>person</code>, <code>car</code>, <code>truck</code>, <code>motorcycle</code>, <code>bus</code>. Ako model nije dostupan (offline okruženje), worker automatski prelazi na deterministički <em>stub</em> detektor kako bi ceo pipeline i dalje radio za demonstraciju.</li>
   <li>Detekcije iz svakog frejma se vraćaju u glavni proces worker-a hronološkim redom i prosleđuju <code>CentroidIoUTracker</code>-u, koji svakom objektu dodeljuje i održava <strong>trajni ID praćenja</strong> dok god je vidljiv.</li>
   <li>Svako zapažanje (centroid, bounding box, pouzdanost, brzina, pravac, da li je unutar zone) se upisuje u <code>object_observations</code>.</li>
-  <li>Za svaki trag se evaluiraju aktivne zone i pravila (<code>zones</code>, <code>rules</code>) i računa se STAR-Risk skor (vidi sekciju 4).</li>
+  <li>Za svaki trag se evaluiraju aktivne zone i pravila (<code>zones</code>, <code>rules</code>) i računa se Risk skor (vidi sekciju 4).</li>
   <li>Kada je ispunjen histerezis uslov, kreira se <code>incidents</code> red + <code>incident_evidence</code> (snimljen anotiran frejm u <code>uploads/evidence/</code>).</li>
   <li>Napredak posla (<code>progress_percent</code>) se ažurira u bazi; <code>/ws/jobs/{id}</code> endpoint periodično čita bazu i gura promene klijentu preko WebSocket-a.</li>
   <li>Na kraju se upisuju <code>performance_metrics</code>: ukupno trajanje, broj obrađenih frejmova, efektivni FPS, prosečna i p95 latencija inferencije (NumPy percentile), CPU/RAM (psutil), čekanje u redu i broj incidenata.</li>
@@ -148,8 +148,8 @@ footer{border-top:1px solid var(--border);margin-top:3rem;padding-top:1.5rem;col
 </section>
 
 <section id="starrisk">
-<h2><span class="num">04</span>STAR-Risk algoritam (Spatio-Temporal Adaptive Risk Scoring)</h2>
-<p>Ovo je originalni, objašnjivi algoritam ovog projekta (implementiran kao čiste Python funkcije u <code>project.py</code>, bez nasumičnih vrednosti — sve dolazi iz stvarne istorije zapažanja).</p>
+<h2><span class="num">04</span>Risk algoritam</h2>
+<p>Ovo je originalni, objašnjivi algoritam ovog projekta (implementiran kao čiste Python funkcije u <code>project.py</code>, bez nasumičnih vrednosti: sve dolazi iz stvarne istorije zapažanja).</p>
 <div class="card">
 <pre><code>raw_risk      = 100 * (0.35*Z + 0.25*D + 0.20*M + 0.10*T + 0.10*C)
 smoothed_risk = alpha * raw_risk + (1 - alpha) * previous_risk      # alpha = 0.45</code></pre>
@@ -160,7 +160,7 @@ smoothed_risk = alpha * raw_risk + (1 - alpha) * previous_risk      # alpha = 0.
 <tbody>
 <tr><td><code>Z</code></td><td>Ozbiljnost zone</td><td>izvan zone = 0; low/medium/high/critical → 0.25 / 0.50 / 0.75 / 1.00</td></tr>
 <tr><td><code>D</code></td><td>Skor zadržavanja (dwell)</td><td><code>min(1, dwell_seconds / minimum_dwell_seconds)</code>, 0 ako je minimum ≤ 0</td></tr>
-<tr><td><code>M</code></td><td>Anomalija kretanja</td><td>izračunato u <code>calculate_motion_anomaly()</code> — prekidi pravca (cos θ &lt; 0) i nagli skokovi brzine (odnos ≥ 2.5×)</td></tr>
+<tr><td><code>M</code></td><td>Anomalija kretanja</td><td>izračunato u <code>calculate_motion_anomaly()</code>: prekidi pravca (cos θ &lt; 0) i nagli skokovi brzine (odnos ≥ 2.5×)</td></tr>
 <tr><td><code>T</code></td><td>Vremenski kontekst</td><td>1.0 ako je van radnog vremena (<code>after_hours</code>), inače 0.0</td></tr>
 <tr><td><code>C</code></td><td>Postojanost pouzdanosti detekcije</td><td>iz poslednjih do 5 detekcija: (broj uzastopnih "visoko pouzdanih" ≥ 0.6, računajući unazad) / veličina prozora × prosek prozora</td></tr>
 </tbody>
@@ -178,13 +178,13 @@ smoothed_risk = alpha * raw_risk + (1 - alpha) * previous_risk      # alpha = 0.
 <tr><td>80–100</td><td>critical</td></tr>
 </tbody>
 </table>
-<p>Svaki incident dobija i čitljivo objašnjenje, npr: <em>"Person track #14 entered the High Security Warehouse zone, remained for 22 seconds, showed two direction reversals, and reached a STAR-Risk score of 84.3."</em></p>
-<div class="note">Algoritam je 100% testiran: <code>test_project.py</code> sadrži 17 pytest testova (granice, nevalidni unosi, histerezis, statično kretanje, promena pravca, deljenje videa koje se ne deli ravnomerno) — svi prolaze.</div>
+<p>Svaki incident dobija i čitljivo objašnjenje, npr: <em>"Person track #14 entered the High Security Warehouse zone, remained for 22 seconds, showed two direction reversals, and reached a Risk score of 84.3."</em></p>
+<div class="note">Algoritam je 100% testiran: <code>test_project.py</code> sadrži 17 pytest testova (granice, nevalidni unosi, histerezis, statično kretanje, promena pravca, deljenje videa koje se ne deli ravnomerno): svi prolaze.</div>
 </section>
 
 <section id="tracker">
-<h2><span class="num">05</span>Tracker — praćenje objekata kroz frejmove</h2>
-<p>Umesto teškog gotovog rešenja (DeepSORT/ByteTrack + re-ID mreža), implementiran je sopstveni lagani <code>CentroidIoUTracker</code> u <code>backend/app/algorithms/tracker.py</code>. On svaki novi frejm detekcija uparuje sa postojećim tragovima na osnovu preklapanja bounding box-ova (IoU) i blizine centroida, dodeljuje nov ID novim objektima i "gasi" trag nakon što je objekat nevidljiv N uzastopnih frejmova. Ovo je dovoljno brzo na CPU-u pri sniženoj frekvenciji uzorkovanja frejmova koju pipeline koristi, a potpuno je razumljivo i testabilno — što je bio prioritet nad apsolutnom preciznošću state-of-the-art MOT (multi-object tracking) modela.</p>
+<h2><span class="num">05</span>Tracker: praćenje objekata kroz frejmove</h2>
+<p>Umesto teškog gotovog rešenja (DeepSORT/ByteTrack + re-ID mreža), implementiran je sopstveni lagani <code>CentroidIoUTracker</code> u <code>backend/app/algorithms/tracker.py</code>. On svaki novi frejm detekcija uparuje sa postojećim tragovima na osnovu preklapanja bounding box-ova (IoU) i blizine centroida, dodeljuje nov ID novim objektima i "gasi" trag nakon što je objekat nevidljiv N uzastopnih frejmova. Ovo je dovoljno brzo na CPU-u pri sniženoj frekvenciji uzorkovanja frejmova koju pipeline koristi, a potpuno je razumljivo i testabilno: što je bio prioritet nad apsolutnom preciznošću state-of-the-art MOT (multi-object tracking) modela.</p>
 </section>
 
 <section id="baza">
@@ -197,15 +197,15 @@ smoothed_risk = alpha * raw_risk + (1 - alpha) * previous_risk      # alpha = 0.
 <tr><td><code>users</code></td><td>Korisnici, uloge (admin/analyst/viewer), hešovana lozinka</td></tr>
 <tr><td><code>refresh_tokens</code></td><td>Opozivi refresh tokeni (omogućavaju pravi logout)</td></tr>
 <tr><td><code>audit_logs</code></td><td>Trag važnih akcija (login, upload, promene zona/pravila, incidenata)</td></tr>
-<tr><td><code>cameras</code></td><td>Kamere — ime, lokacija, vlasnik, aktivnost</td></tr>
-<tr><td><code>video_sources</code></td><td>Otpremljeni video fajlovi — trajanje, FPS, rezolucija</td></tr>
+<tr><td><code>cameras</code></td><td>Kamere: ime, lokacija, vlasnik, aktivnost</td></tr>
+<tr><td><code>video_sources</code></td><td>Otpremljeni video fajlovi: trajanje, FPS, rezolucija</td></tr>
 <tr><td><code>processing_jobs</code></td><td>Status/napredak Celery obrade jednog videa</td></tr>
 <tr><td><code>detection_models</code></td><td>Registrovani modeli detekcije (YOLOv8 varijante)</td></tr>
 <tr><td><code>zones</code></td><td>Poligon sigurnosne zone po kameri, sa nivoom ozbiljnosti</td></tr>
-<tr><td><code>rules</code></td><td>Pravila po zoni — klasa objekta, min. zadržavanje, prag rizika, samo van radnog vremena</td></tr>
+<tr><td><code>rules</code></td><td>Pravila po zoni: klasa objekta, min. zadržavanje, prag rizika, samo van radnog vremena</td></tr>
 <tr><td><code>tracked_objects</code></td><td>Jedan trag objekta unutar jednog posla obrade</td></tr>
 <tr><td><code>object_observations</code></td><td>Svako pojedinačno zapažanje traga (frejm, centroid, brzina, pravac...)</td></tr>
-<tr><td><code>incidents</code></td><td>Kreirani incidenti — skor, status, prioritet, objašnjenje</td></tr>
+<tr><td><code>incidents</code></td><td>Kreirani incidenti: skor, status, prioritet, objašnjenje</td></tr>
 <tr><td><code>incident_evidence</code></td><td>Anotirani kadrovi kao dokaz incidenta</td></tr>
 <tr><td><code>performance_metrics</code></td><td>Metrike posla obrade (FPS, latencija, CPU/RAM, queue delay)</td></tr>
 </tbody>
@@ -215,11 +215,11 @@ smoothed_risk = alpha * raw_risk + (1 - alpha) * previous_risk      # alpha = 0.
 
 <section id="auth">
 <h2><span class="num">07</span>Autentikacija i uloge (RBAC)</h2>
-<p>Lozinke se nikad ne čuvaju u čistom tekstu — heširaju se sa <code>passlib[bcrypt]</code>. Prijava vraća kratkotrajni JWT <em>access token</em> i dugotrajniji <em>refresh token</em> koji se čuva (i može opozvati) u tabeli <code>refresh_tokens</code> — zato je logout stvaran, ne samo brisanje tokena na klijentu.</p>
+<p>Lozinke se nikad ne čuvaju u čistom tekstu: heširaju se sa <code>passlib[bcrypt]</code>. Prijava vraća kratkotrajni JWT <em>access token</em> i dugotrajniji <em>refresh token</em> koji se čuva (i može opozvati) u tabeli <code>refresh_tokens</code>: zato je logout stvaran, ne samo brisanje tokena na klijentu.</p>
 <div class="grid2">
-<div class="card"><span class="pill admin">admin</span><p style="margin-top:.6rem">Puna kontrola — korisnici, sve kamere/zone/pravila, svi incidenti, audit log.</p></div>
+<div class="card"><span class="pill admin">admin</span><p style="margin-top:.6rem">Puna kontrola: korisnici, sve kamere/zone/pravila, svi incidenti, audit log.</p></div>
 <div class="card"><span class="pill analyst">analyst</span><p style="margin-top:.6rem">Otprema video, kreira kamere/zone/pravila, rešava incidente.</p></div>
-<div class="card"><span class="pill viewer">viewer</span><p style="margin-top:.6rem">Samo pregled — video, napredak obrade, incidenti, izveštaji.</p></div>
+<div class="card"><span class="pill viewer">viewer</span><p style="margin-top:.6rem">Samo pregled: video, napredak obrade, incidenti, izveštaji.</p></div>
 </div>
 <p>Svaka zaštićena ruta koristi FastAPI zavisnost <code>require_roles(...)</code> koja proverava ulogu trenutnog korisnika pre izvršavanja logike. Važne akcije (login, upload, kreiranje zone, promena pravila, promena statusa incidenta, brisanje) se automatski upisuju u <code>audit_logs</code>.</p>
 </section>
@@ -289,12 +289,12 @@ python project.py split-video --duration 130 --chunk-size 30</code></pre>
 </section>
 
 <section id="cs50">
-<h2><span class="num">12</span>CS50P zahtevi — mapiranje</h2>
+<h2><span class="num">12</span>CS50P zahtevi: mapiranje</h2>
 <div class="tablewrap">
 <table>
 <thead><tr><th>Zahtev</th><th>Status</th></tr></thead>
 <tbody>
-<tr><td><code>project.py</code> u korenu, sa <code>main()</code> + 3 dodatne funkcije</td><td>✅ 4 funkcije: <code>calculate_star_risk</code>, <code>is_incident_triggered</code>, <code>calculate_motion_anomaly</code>, <code>split_video_chunks</code></td></tr>
+<tr><td><code>project.py</code> u korenu, sa <code>main()</code> + 3 dodatne funkcije</td><td>✅ 4 funkcije: <code>calculate_risk</code>, <code>is_incident_triggered</code>, <code>calculate_motion_anomaly</code>, <code>split_video_chunks</code></td></tr>
 <tr><td><code>test_project.py</code> sa testovima za bar 3 funkcije</td><td>✅ 17 testova, pokrivaju sve 4 funkcije + granične/nevalidne slučajeve</td></tr>
 <tr><td><code>requirements.txt</code></td><td>✅ u korenu</td></tr>
 <tr><td><code>README.md</code> ≥ 500 reči</td><td>✅ ~1000+ reči, sve tražene sekcije</td></tr>
@@ -308,14 +308,14 @@ python project.py split-video --duration 130 --chunk-size 30</code></pre>
 <div class="note warn">
 <strong>Trenutna ograničenja:</strong>
 <ul style="margin:.5rem 0 0">
-  <li>Ne zahteva GPU — bazno je CPU inferenca (YOLOv8n je dovoljno mali); ako model nije dostupan offline, koristi se deterministički stub detektor.</li>
-  <li>WebSocket napredak koristi polling baze po konekciji (ne Redis pub/sub) — jednostavno i pouzdano za jednu instancu backend-a, ali nije horizontalno skalabilno u trenutnom obliku.</li>
-  <li>Reprodukcija videa u Video Detail stranici je trenutno placeholder — potrebno je servisiranje statičkih fajlova/potpisanih URL-ova iz <code>uploads/</code>.</li>
+  <li>Ne zahteva GPU: bazno je CPU inferenca (YOLOv8n je dovoljno mali); ako model nije dostupan offline, koristi se deterministički stub detektor.</li>
+  <li>WebSocket napredak koristi polling baze po konekciji (ne Redis pub/sub): jednostavno i pouzdano za jednu instancu backend-a, ali nije horizontalno skalabilno u trenutnom obliku.</li>
+  <li>Reprodukcija videa u Video Detail stranici je trenutno placeholder: potrebno je servisiranje statičkih fajlova/potpisanih URL-ova iz <code>uploads/</code>.</li>
 </ul>
 </div>
 <p><strong>Planirana proširenja:</strong> RTSP live-stream unos, ONNX Runtime/TensorRT kao opcioni brži inference backend, opcioni GPU Celery red, distribuirana obrada na više čvorova, semantička pretraga incidenata (embeddings + vektorska baza), push/email/SMS notifikacije, Redis pub/sub WebSocket fan-out za više replika backend-a.</p>
 </section>
 
-<footer>SentinelAI — CS50P Final Project · Dokumentacija generisana iz izvornog koda projekta (project.py, README.md, backend/app/).</footer>
+<footer>SentinelAI: CS50P Final Project · Dokumentacija generisana iz izvornog koda projekta (project.py, README.md, backend/app/).</footer>
 </main>
 </div>

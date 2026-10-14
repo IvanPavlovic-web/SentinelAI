@@ -1,5 +1,5 @@
 """
-test_project.py — pytest tests for SentinelAI's project.py (CS50P final project).
+test_project.py - pytest tests for SentinelAI's project.py (CS50P final project).
 
 Run with:  python -m pytest test_project.py -v
 """
@@ -7,7 +7,7 @@ Run with:  python -m pytest test_project.py -v
 import pytest
 
 from project import (
-    calculate_star_risk,
+    calculate_risk,
     is_incident_triggered,
     calculate_motion_anomaly,
     split_video_chunks,
@@ -15,13 +15,13 @@ from project import (
 
 
 # --------------------------------------------------------------------------
-# calculate_star_risk
+# calculate_risk
 # --------------------------------------------------------------------------
 
-def test_calculate_star_risk():
+def test_calculate_risk():
     # High severity zone, full dwell, high anomaly, after hours, strong
     # confidence streak -> should produce a high risk score.
-    risk_high = calculate_star_risk(
+    risk_high = calculate_risk(
         zone_severity="critical",
         dwell_seconds=20.0,
         minimum_dwell_seconds=10.0,
@@ -37,7 +37,7 @@ def test_calculate_star_risk():
     assert risk_high == pytest.approx(98.98, abs=0.1)
 
     # No zone, no dwell, no anomaly, daytime, no confidence history -> 0 risk.
-    risk_low = calculate_star_risk(
+    risk_low = calculate_risk(
         zone_severity=None,
         dwell_seconds=0.0,
         minimum_dwell_seconds=10.0,
@@ -51,9 +51,9 @@ def test_calculate_star_risk():
     assert risk_high > risk_low
 
 
-def test_calculate_star_risk_alpha_boundaries():
+def test_calculate_risk_alpha_boundaries():
     # alpha=0 -> result is exactly previous_risk regardless of inputs.
-    risk = calculate_star_risk(
+    risk = calculate_risk(
         zone_severity="high",
         dwell_seconds=50.0,
         minimum_dwell_seconds=5.0,
@@ -66,7 +66,7 @@ def test_calculate_star_risk_alpha_boundaries():
     assert risk == pytest.approx(42.0)
 
     # alpha=1 -> result is exactly the raw risk, previous_risk ignored.
-    risk_full = calculate_star_risk(
+    risk_full = calculate_risk(
         zone_severity=None,
         dwell_seconds=0.0,
         minimum_dwell_seconds=10.0,
@@ -79,9 +79,9 @@ def test_calculate_star_risk_alpha_boundaries():
     assert risk_full == 0.0
 
 
-def test_calculate_star_risk_zero_and_negative_minimum_dwell():
+def test_calculate_risk_zero_and_negative_minimum_dwell():
     # minimum_dwell_seconds <= 0 is guarded: dwell score becomes 0, no error.
-    risk = calculate_star_risk(
+    risk = calculate_risk(
         zone_severity=None,
         dwell_seconds=5.0,
         minimum_dwell_seconds=0.0,
@@ -92,7 +92,7 @@ def test_calculate_star_risk_zero_and_negative_minimum_dwell():
     )
     assert risk == 0.0
 
-    risk_neg = calculate_star_risk(
+    risk_neg = calculate_risk(
         zone_severity=None,
         dwell_seconds=5.0,
         minimum_dwell_seconds=-3.0,
@@ -104,9 +104,9 @@ def test_calculate_star_risk_zero_and_negative_minimum_dwell():
     assert risk_neg == 0.0
 
 
-def test_calculate_star_risk_exact_dwell_boundary():
+def test_calculate_risk_exact_dwell_boundary():
     # dwell_seconds exactly equal to minimum_dwell_seconds -> dwell score = 1.0 (capped).
-    risk_exact = calculate_star_risk(
+    risk_exact = calculate_risk(
         zone_severity=None,
         dwell_seconds=10.0,
         minimum_dwell_seconds=10.0,
@@ -119,7 +119,7 @@ def test_calculate_star_risk_exact_dwell_boundary():
     assert risk_exact == pytest.approx(25.0)
 
     # dwell_seconds beyond minimum -> still capped at 1.0 (same result).
-    risk_over = calculate_star_risk(
+    risk_over = calculate_risk(
         zone_severity=None,
         dwell_seconds=50.0,
         minimum_dwell_seconds=10.0,
@@ -131,9 +131,9 @@ def test_calculate_star_risk_exact_dwell_boundary():
     assert risk_over == pytest.approx(25.0)
 
 
-def test_calculate_star_risk_invalid_inputs():
+def test_calculate_risk_invalid_inputs():
     with pytest.raises(ValueError):
-        calculate_star_risk(
+        calculate_risk(
             zone_severity="not-a-real-zone",
             dwell_seconds=1.0,
             minimum_dwell_seconds=10.0,
@@ -143,7 +143,7 @@ def test_calculate_star_risk_invalid_inputs():
         )
 
     with pytest.raises(ValueError):
-        calculate_star_risk(
+        calculate_risk(
             zone_severity=None,
             dwell_seconds=-1.0,
             minimum_dwell_seconds=10.0,
@@ -153,7 +153,7 @@ def test_calculate_star_risk_invalid_inputs():
         )
 
     with pytest.raises(ValueError):
-        calculate_star_risk(
+        calculate_risk(
             zone_severity=None,
             dwell_seconds=1.0,
             minimum_dwell_seconds=10.0,
@@ -163,7 +163,7 @@ def test_calculate_star_risk_invalid_inputs():
         )
 
     with pytest.raises(ValueError):
-        calculate_star_risk(
+        calculate_risk(
             zone_severity=None,
             dwell_seconds=1.0,
             minimum_dwell_seconds=10.0,
@@ -174,8 +174,8 @@ def test_calculate_star_risk_invalid_inputs():
         )
 
 
-def test_calculate_star_risk_zone_case_insensitive():
-    r_lower = calculate_star_risk(
+def test_calculate_risk_zone_case_insensitive():
+    r_lower = calculate_risk(
         zone_severity="high",
         dwell_seconds=0.0,
         minimum_dwell_seconds=10.0,
@@ -184,7 +184,7 @@ def test_calculate_star_risk_zone_case_insensitive():
         confidence_history=[],
         alpha=1.0,
     )
-    r_mixed = calculate_star_risk(
+    r_mixed = calculate_risk(
         zone_severity="HiGh",
         dwell_seconds=0.0,
         minimum_dwell_seconds=10.0,

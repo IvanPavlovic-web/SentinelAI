@@ -52,7 +52,7 @@ export default function VideoDetail() {
     enabled: !!videoId,
   });
 
-  // Every job ever run for this video, newest first — lets the page find
+  // Every job ever run for this video, newest first: lets the page find
   // and subscribe to live progress right after upload, without requiring
   // the user to click "Reprocess" first.
   const { data: jobs } = useQuery({
@@ -129,10 +129,14 @@ export default function VideoDetail() {
   }, [events.length]);
 
   const { data: incidents } = useQuery({
-    queryKey: ["incidents-for-video", videoId],
+    queryKey: ["incidents-for-job", activeJob?.id],
     queryFn: async () =>
-      (await apiClient.get<{ items: Incident[] }>("/api/incidents", { params: { page_size: 50 } })).data.items,
-    enabled: !!videoId,
+      (
+        await apiClient.get<{ items: Incident[] }>("/api/incidents", {
+          params: { processing_job_id: activeJob!.id, page_size: 50 },
+        })
+      ).data.items,
+    enabled: !!activeJob,
     refetchInterval: isLive ? 5000 : false,
   });
 
@@ -207,7 +211,7 @@ export default function VideoDetail() {
             {!hasAnnotated && (
               <p className="mt-2 text-xs text-slate-500">
                 {isLive
-                  ? "Showing the original upload while analysis runs — this will switch to the detection overlay once processing completes."
+                  ? "Showing the original upload while analysis runs. This will switch to the detection overlay once processing completes."
                   : "Showing the original upload. Run analysis to see detection boxes burned in."}
               </p>
             )}
@@ -269,7 +273,7 @@ export default function VideoDetail() {
               <p className="text-sm text-slate-500">
                 {isLive
                   ? "Watching for people and vehicles in the footage…"
-                  : "Nothing detected yet — run analysis to find out what's in this video."}
+                  : "Nothing detected yet. Run analysis to find out what's in this video."}
               </p>
             )}
             {classEntries.length > 0 && (
@@ -319,7 +323,7 @@ export default function VideoDetail() {
           </div>
         </div>
 
-        {/* Right column: live activity narration — the primary surface for
+        {/* Right column: live activity narration, the primary surface for
             "what's happening right now", with incidents below it. */}
         <div className="space-y-4">
           <div className="bg-ops-panel border border-ops-border rounded-lg p-4 flex flex-col max-h-[640px]">
@@ -334,7 +338,7 @@ export default function VideoDetail() {
             <div className="overflow-y-auto flex-1 space-y-1.5 pr-1">
               {events.length === 0 && (
                 <p className="text-sm text-slate-500">
-                  {isLive ? "Watching the footage — narration will appear here as the AI finds things." : "No activity recorded yet."}
+                  {isLive ? "Watching the footage. Narration will appear here as the AI finds things." : "No activity recorded yet."}
                 </p>
               )}
               {events.map((e) => (
@@ -359,7 +363,7 @@ export default function VideoDetail() {
               {incidents?.map((incident) => (
                 <li key={incident.id} className="border-b border-ops-border pb-2 last:border-0">
                   <p className="text-slate-300">{incident.summary}</p>
-                  <p className="text-xs text-status-critical font-semibold">Risk: {incident.star_risk_score.toFixed(1)}</p>
+                  <p className="text-xs text-status-critical font-semibold">Risk: {incident.risk_score.toFixed(1)}</p>
                 </li>
               ))}
             </ul>

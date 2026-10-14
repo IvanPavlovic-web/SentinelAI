@@ -1,4 +1,4 @@
-"""Re-exports the pure STAR-Risk algorithm functions from the repository
+"""Re-exports the pure Risk algorithm functions from the repository
 root's project.py (the CS50P-graded module), so the FastAPI backend and the
 CS50 CLI share a single source of truth for the algorithm instead of having
 two diverging implementations.
@@ -20,14 +20,14 @@ if str(_REPO_ROOT) not in sys.path:
 
 from project import (  # noqa: E402  (import after sys.path manipulation, by design)
     calculate_motion_anomaly,
-    calculate_star_risk,
+    calculate_risk,
     is_incident_triggered,
     split_video_chunks,
 )
 
 __all__ = [
     "calculate_motion_anomaly",
-    "calculate_star_risk",
+    "calculate_risk",
     "is_incident_triggered",
     "split_video_chunks",
 ]

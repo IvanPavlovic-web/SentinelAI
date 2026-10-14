@@ -10,23 +10,33 @@ from app.models.incident import Incident, IncidentPriority, IncidentStatus, Perf
 
 
 def get_summary(db: Session) -> dict:
-    total_cameras = db.query(Camera).count()
-    active_cameras = db.query(Camera).filter(Camera.is_active.is_(True)).count()
-    total_videos = db.query(VideoSource).count()
+    # One query per table instead of one per metric (this used to be 13
+    # round-trips: 2 for cameras, 1 for videos, 4 for job statuses, 2 for
+    # incident counts, and 4 more -- one per IncidentPriority -- in a Python
+    # loop). FILTER-qualified aggregates let Postgres compute every count
+    # for a table in a single pass instead of rescanning it once per metric.
+    total_cameras, active_cameras = db.query(
+        func.count(Camera.id),
+        func.count(Camera.id).filter(Camera.is_active.is_(True)),
+    ).one()
 
-    jobs_pending = db.query(ProcessingJob).filter(ProcessingJob.status == JobStatus.PENDING).count()
-    jobs_processing = db.query(ProcessingJob).filter(ProcessingJob.status == JobStatus.PROCESSING).count()
-    jobs_completed = db.query(ProcessingJob).filter(ProcessingJob.status == JobStatus.COMPLETED).count()
-    jobs_failed = db.query(ProcessingJob).filter(ProcessingJob.status == JobStatus.FAILED).count()
+    total_videos = db.query(func.count(VideoSource.id)).scalar()
 
-    open_incidents = db.query(Incident).filter(Incident.status == IncidentStatus.OPEN).count()
+    jobs_pending, jobs_processing, jobs_completed, jobs_failed = db.query(
+        func.count(ProcessingJob.id).filter(ProcessingJob.status == JobStatus.PENDING),
+        func.count(ProcessingJob.id).filter(ProcessingJob.status == JobStatus.PROCESSING),
+        func.count(ProcessingJob.id).filter(ProcessingJob.status == JobStatus.COMPLETED),
+        func.count(ProcessingJob.id).filter(ProcessingJob.status == JobStatus.FAILED),
+    ).one()
 
     since = datetime.now(timezone.utc) - timedelta(hours=24)
-    incidents_last_24h = db.query(Incident).filter(Incident.detected_at >= since).count()
+    open_incidents, incidents_last_24h = db.query(
+        func.count(Incident.id).filter(Incident.status == IncidentStatus.OPEN),
+        func.count(Incident.id).filter(Incident.detected_at >= since),
+    ).one()
 
-    incidents_by_priority = {}
-    for priority in IncidentPriority:
-        count = db.query(Incident).filter(Incident.priority == priority).count()
+    incidents_by_priority = {p.value: 0 for p in IncidentPriority}
+    for priority, count in db.query(Incident.priority, func.count(Incident.id)).group_by(Incident.priority).all():
         incidents_by_priority[priority.value] = count
 
     return {

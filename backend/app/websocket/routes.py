@@ -77,7 +77,7 @@ async def ws_incidents(websocket: WebSocket):
                         {
                             "id": incident.id,
                             "object_class": incident.object_class,
-                            "star_risk_score": incident.star_risk_score,
+                            "risk_score": incident.risk_score,
                             "priority": incident.priority.value,
                             "status": incident.status.value,
                             "summary": incident.summary,

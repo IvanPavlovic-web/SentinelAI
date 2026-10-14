@@ -27,7 +27,7 @@ def get_job_metrics(db: Session, job_id: int) -> list[PerformanceMetric]:
 
 
 def get_job_detection_counts(db: Session, job_id: int) -> dict:
-    """Lightweight live summary — one cheap group-by query, safe to call on
+    """Lightweight live summary: one cheap group-by query, safe to call on
     every WebSocket poll tick (every ~1s) while a job is still processing,
     since tracked_objects/object_observations rows are committed
     incrementally as the pipeline runs, not only at the end."""
@@ -45,7 +45,7 @@ def get_job_detection_counts(db: Session, job_id: int) -> dict:
 
 
 def get_job_events(db: Session, job_id: int, limit: int = 500) -> list[dict]:
-    """The full live-activity narration log for a job, oldest first — what
+    """The full live-activity narration log for a job, oldest first: what
     GET /api/jobs/{id}/events returns for post-hoc review of a completed
     job. The WebSocket carries only the newest slice of this while a job
     is still processing (see get_recent_events)."""
@@ -61,7 +61,7 @@ def get_job_events(db: Session, job_id: int, limit: int = 500) -> list[dict]:
 
 
 def get_recent_events(db: Session, job_id: int, limit: int = 15) -> list[dict]:
-    """Newest `limit` events, oldest-first within that slice — cheap enough
+    """Newest `limit` events, oldest-first within that slice, cheap enough
     to call on every WebSocket poll tick while a job is processing."""
     rows = (
         db.query(ActivityEvent)
@@ -88,7 +88,7 @@ def _serialize_event(e: ActivityEvent) -> dict:
 
 def get_job_detections(db: Session, job_id: int) -> dict:
     """Full per-track detection detail for a job: what was detected, how
-    often, how confidently, and its final STAR-Risk score — independent of
+    often, how confidently, and its final Risk score, independent of
     whether the video's camera has any zones/rules configured, so 'what is
     in this footage' is always answerable, not just 'did it trigger an
     incident'."""

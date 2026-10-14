@@ -47,7 +47,7 @@ class ObjectObservation(Base):
     centroid_x: Mapped[float] = mapped_column(Float, nullable=False)
     centroid_y: Mapped[float] = mapped_column(Float, nullable=False)
     zone_id: Mapped[int | None] = mapped_column(ForeignKey("zones.id", ondelete="SET NULL"), nullable=True)
-    star_risk_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    risk_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     tracked_object: Mapped["TrackedObject"] = relationship(back_populates="observations")
@@ -55,7 +55,7 @@ class ObjectObservation(Base):
 
 class ActivityEvent(Base):
     """A human-readable, timestamped narration entry generated live while a
-    video is analyzed — "Person #2 is moving erratically", "Weapon-like
+    video is analyzed: "Person #2 is moving erratically", "Weapon-like
     object detected", a periodic "still visible, normal" heartbeat, and
     risk-severity escalations. This is what the Video Detail page's live
     activity panel renders, and what GET /api/jobs/{id}/events replays for

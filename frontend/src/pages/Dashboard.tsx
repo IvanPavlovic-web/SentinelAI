@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { apiClient } from "../api/client";
-import type { DashboardSummary, Incident, PaginatedIncidents } from "../types";
+import type { Camera, DashboardSummary, Incident, PaginatedIncidents } from "../types";
 import StatTile from "../components/StatTile";
 
 const priorityPill: Record<string, string> = {
@@ -25,6 +26,14 @@ export default function Dashboard() {
     refetchInterval: 10000,
   });
 
+  // latest_job_status comes back inline with the list (see Cameras.tsx for
+  // the same fix), so this needs one request instead of one per camera.
+  const { data: cameras } = useQuery({
+    queryKey: ["cameras"],
+    queryFn: async () => (await apiClient.get<Camera[]>("/api/cameras")).data,
+    refetchInterval: 10000,
+  });
+
   const priorityData = summary
     ? Object.entries(summary.incidents_by_priority).map(([priority, count]) => ({ priority, count }))
     : [];
@@ -36,17 +45,53 @@ export default function Dashboard() {
         <h1 className="font-display text-2xl font-semibold">Dashboard</h1>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3.5">
-        <StatTile label="Total Videos" value={summary?.total_videos ?? "–"} />
-        <StatTile label="Open Incidents" value={summary?.open_incidents ?? "–"} accent="red" />
-        <StatTile label="Incidents (24h)" value={summary?.incidents_last_24h ?? "–"} accent="amber" />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+        <StatTile label="Cameras" value={summary?.total_cameras ?? "-"} />
+        <StatTile
+          label="Live Now"
+          value={summary?.active_cameras ?? "-"}
+          accent={summary && summary.active_cameras > 0 ? "green" : "default"}
+        />
+        <StatTile label="Open Incidents" value={summary?.open_incidents ?? "-"} accent="red" />
+        <StatTile label="Incidents (24h)" value={summary?.incidents_last_24h ?? "-"} accent="amber" />
+      </div>
+
+      <div className="bg-ops-panel border border-ops-border rounded-lg p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400">Cameras</h2>
+          <Link to="/cameras" className="text-xs text-ops-accent hover:underline">
+            Manage cameras
+          </Link>
+        </div>
+        {(!cameras || cameras.length === 0) && (
+          <p className="text-sm text-slate-500">
+            No cameras connected yet. Add one under Cameras to start live monitoring.
+          </p>
+        )}
+        {cameras && cameras.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {cameras.map((camera) => {
+              const isLive = camera.latest_job_status === "pending" || camera.latest_job_status === "processing";
+              return (
+                <Link
+                  key={camera.id}
+                  to={`/cameras/${camera.id}`}
+                  className="flex items-center gap-2 text-xs font-mono px-3 py-1.5 rounded-full border border-ops-border bg-ops-panel2 hover:border-ops-accent/40"
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${isLive ? "bg-status-ok animate-pulse" : "bg-ops-borderStrong"}`} />
+                  <span className="text-slate-200">{camera.name}</span>
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-        <StatTile label="Jobs Pending" value={summary?.jobs_pending ?? "–"} />
-        <StatTile label="Jobs Processing" value={summary?.jobs_processing ?? "–"} accent="amber" />
-        <StatTile label="Jobs Completed" value={summary?.jobs_completed ?? "–"} accent="green" />
-        <StatTile label="Jobs Failed" value={summary?.jobs_failed ?? "–"} accent="red" />
+        <StatTile label="Total Videos" value={summary?.total_videos ?? "-"} />
+        <StatTile label="Jobs Processing" value={summary?.jobs_processing ?? "-"} accent="amber" />
+        <StatTile label="Jobs Completed" value={summary?.jobs_completed ?? "-"} accent="green" />
+        <StatTile label="Jobs Failed" value={summary?.jobs_failed ?? "-"} accent="red" />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
@@ -70,7 +115,7 @@ export default function Dashboard() {
         <div className="bg-ops-panel border border-ops-border rounded-lg p-5">
           <h2 className="text-xs font-semibold uppercase tracking-widest2 text-slate-400 mb-4">Recent Incidents</h2>
           {incidents?.items.length === 0 && (
-            <p className="text-sm text-slate-500">No incidents yet — the dashboard will populate once a video is processed.</p>
+            <p className="text-sm text-slate-500">No incidents yet. The dashboard fills in once a camera or video is analyzed.</p>
           )}
           <ul className="space-y-1">
             {incidents?.items.map((incident: Incident) => (
@@ -87,7 +132,7 @@ export default function Dashboard() {
                   >
                     {incident.priority}
                   </span>
-                  <span className="tabular text-sm font-medium text-ops-accent">{incident.star_risk_score.toFixed(1)}</span>
+                  <span className="tabular text-sm font-medium text-ops-accent">{incident.risk_score.toFixed(1)}</span>
                 </div>
               </li>
             ))}

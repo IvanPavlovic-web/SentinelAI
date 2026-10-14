@@ -1,22 +1,76 @@
-"""Seed script: creates demo users, a camera, zones/rules, and sample
-tracked_objects/incidents so the dashboard has data to show without first
-processing a real video.
+"""Seed script: creates demo users, the detection-model row, and real
+camera(s) you can actually start monitoring immediately -- no fabricated
+video/incident history, since none of that would correspond to anything
+that actually happened.
+
+Camera sources are real, publicly reachable webcams in Bosnia and
+Herzegovina (not RTSP -- see the comment on BIH_WEBCAMS below for why
+that's fine). Point your own camera's RTSP URL at a Camera row (via the
+UI or API) the same way; nothing about these is special-cased. Each one
+was individually verified (image actually downloaded and inspected, URL
+opened with cv2.VideoCapture) before being added here -- do not add
+another "live webcam" URL to this list without doing the same; most
+public webcam sites only expose a JS player with no fetchable underlying
+image/stream, and guessing at one produces a URL that looks plausible but
+doesn't work.
+
+Five are hosted by Bergfex (images.bergfex.at); one (the Banja Luka
+traffic camera) is a BIHAMK (Bosnia-Herzegovina Automobile Club) camera
+re-served through Windy's imgproxy. All are periodically-refreshed JPEG
+snapshots, not continuous RTSP/HLS streams (true of the overwhelming
+majority of public-facing "live webcams" worldwide, BiH included --
+they're built for an <img> tag that re-requests every so often, not for a
+monitoring pipeline). app/workers/tasks.py's live-camera loop reopens the
+capture and retries on every read failure specifically to make this kind
+of source work continuously: each retry just fetches the latest refresh.
 
 Run with:  python -m app.seed   (from the backend/ directory, with DB
 migrations already applied)
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta, timezone
-
 from app.core.security import hash_password
 from app.db.base import Base, SessionLocal, engine
-from app.models.camera import Camera, DetectionModel, JobStatus, ProcessingJob, VideoSource
-from app.models.incident import Incident, IncidentEvidence, IncidentPriority, IncidentStatus, PerformanceMetric
-from app.models.tracking import ObjectObservation, TrackedObject
+from app.models.camera import Camera, DetectionModel
 from app.models.user import User, UserRole
 from app.models.zone import Rule, Zone, ZoneSeverity
+import json
+
+# (name, location, snapshot URL). The first is the one with a demo
+# zone/rule attached below; the rest are added as plain cameras so there
+# are several real feeds to switch between.
+BIH_WEBCAMS = [
+    (
+        "Jahorina (BiH public webcam)",
+        "Jahorina, Republika Srpska, Bosnia and Herzegovina",
+        "https://images.bergfex.at/webcams/?id=24861&2&format=11",
+    ),
+    (
+        "Ravna Planina (BiH public webcam)",
+        "Ravna Planina Ski Centar, near Jahorina, Republika Srpska, BiH",
+        "https://images.bergfex.at/webcams/?id=24857&2&format=44",
+    ),
+    (
+        "Bjelasnica - Ski Jump (BiH public webcam)",
+        "Bjelasnica, Federation of BiH",
+        "https://images.bergfex.at/webcams/?id=16722&2&format=44",
+    ),
+    (
+        "Bjelasnica - Hotel View (BiH public webcam)",
+        "Bjelasnica, Federation of BiH",
+        "https://images.bergfex.at/webcams/?id=16732&2&format=44",
+    ),
+    (
+        "Igman - Olympic Monument (BiH public webcam)",
+        "Igman, near Sarajevo, Federation of BiH",
+        "https://images.bergfex.at/webcams/?id=16730&2&format=44",
+    ),
+    (
+        "Banja Luka - Lazarevo (BIHAMK traffic cam)",
+        "Lazarevo intersection, Banja Luka, Republika Srpska, BiH",
+        "https://imgproxy.windy.com/_/full/plain/current/1634472035/original.jpg?v=2",
+    ),
+]
 
 
 def seed() -> None:
@@ -47,137 +101,39 @@ def seed() -> None:
         db.refresh(admin)
         db.refresh(analyst)
 
-        model = DetectionModel(name="YOLOv8n", version="8.3.49", weights_path="yolov8n.pt", is_stub=True)
-        db.add(model)
+        db.add(DetectionModel(name="YOLOv8n", version="8.3.49", weights_path="yolov8n.pt", is_stub=False))
 
-        camera = Camera(
-            name="Warehouse Dock Camera",
-            location="North Warehouse - Loading Dock",
-            rtsp_url="rtsp://demo:demo@127.0.0.1:8554/warehouse",
-            owner_id=admin.id,
-        )
-        db.add(camera)
-        db.commit()
-        db.refresh(camera)
+        cameras = []
+        for name, location, url in BIH_WEBCAMS:
+            camera = Camera(name=name, location=location, rtsp_url=url, owner_id=admin.id)
+            db.add(camera)
+            db.commit()
+            db.refresh(camera)
+            cameras.append(camera)
 
+        # A working example of zone/rule configuration (currently API-only;
+        # see README "Known limitations"), on the first camera, covering
+        # the full frame since these are wide panoramas rather than a
+        # fixed security-camera angle with a specific area to flag.
         zone = Zone(
-            camera_id=camera.id,
-            name="High Security Warehouse",
-            severity=ZoneSeverity.HIGH,
-            polygon_json=json.dumps([[0.2, 0.2], [0.8, 0.2], [0.8, 0.9], [0.2, 0.9]]),
+            camera_id=cameras[0].id,
+            name="Full frame",
+            severity=ZoneSeverity.MEDIUM,
+            polygon_json=json.dumps([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
             minimum_dwell_seconds=10.0,
         )
         db.add(zone)
         db.commit()
         db.refresh(zone)
 
-        rule = Rule(
-            zone_id=zone.id,
-            name="After-hours loitering",
-            object_classes="person",
-            after_hours_only=True,
-            risk_threshold=70.0,
-            consecutive_required=3,
-        )
-        db.add(rule)
-
-        video_source = VideoSource(
-            camera_id=camera.id,
-            uploaded_by=admin.id,
-            original_filename="sample_dock_feed.mp4",
-            stored_filename="sample_dock_feed_seed.mp4",
-            file_path="uploads/sample_dock_feed_seed.mp4",
-            file_size_bytes=10_485_760,
-            duration_seconds=130.0,
-            fps=25.0,
-            width=1280,
-            height=720,
-        )
-        db.add(video_source)
-        db.commit()
-        db.refresh(video_source)
-
-        job = ProcessingJob(
-            video_source_id=video_source.id,
-            detection_model_id=model.id,
-            status=JobStatus.COMPLETED,
-            progress_percent=100.0,
-            started_at=datetime.now(timezone.utc) - timedelta(minutes=5),
-            finished_at=datetime.now(timezone.utc) - timedelta(minutes=4),
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-
-        tracked = TrackedObject(
-            processing_job_id=job.id,
-            track_number=14,
-            object_class="person",
-            final_risk_score=78.8,
-        )
-        db.add(tracked)
-        db.commit()
-        db.refresh(tracked)
-
-        base_ts = datetime.now(timezone.utc) - timedelta(minutes=10)
-        for i, (dwell, risk) in enumerate([(2, 19.0), (6, 35.7), (11, 50.9), (14, 62.8), (18, 71.9), (24, 78.8)]):
-            db.add(
-                ObjectObservation(
-                    tracked_object_id=tracked.id,
-                    frame_number=i * 25,
-                    timestamp_seconds=float(dwell),
-                    bbox_x1=400.0, bbox_y1=200.0, bbox_x2=500.0, bbox_y2=450.0,
-                    confidence=0.8 + i * 0.02,
-                    centroid_x=450.0, centroid_y=325.0,
-                    zone_id=zone.id,
-                    star_risk_score=risk,
-                )
-            )
-        db.commit()
-
-        incident = Incident(
-            processing_job_id=job.id,
-            camera_id=camera.id,
-            zone_id=zone.id,
-            tracked_object_id=tracked.id,
-            rule_id=rule.id,
-            object_class="person",
-            star_risk_score=78.8,
-            status=IncidentStatus.OPEN,
-            priority=IncidentPriority.HIGH,
-            summary=(
-                "Person track #14 entered the High Security Warehouse zone after "
-                "hours and loitered for 24s with erratic movement, producing a "
-                "STAR-Risk score of 78.8."
-            ),
-            detected_at=base_ts,
-        )
-        db.add(incident)
-        db.commit()
-        db.refresh(incident)
-
         db.add(
-            IncidentEvidence(
-                incident_id=incident.id,
-                frame_path="uploads/evidence/seed_incident_1.jpg",
-                frame_number=600,
-                timestamp_seconds=24.0,
-            )
-        )
-
-        db.add(
-            PerformanceMetric(
-                processing_job_id=job.id,
-                total_frames=3250,
-                processed_frames=650,
-                duration_seconds=22.4,
-                processing_fps=29.0,
-                avg_latency_ms=34.5,
-                p95_latency_ms=58.2,
-                avg_cpu_percent=42.3,
-                avg_ram_mb=512.6,
-                queue_wait_seconds=1.2,
-                incident_count=1,
+            Rule(
+                zone_id=zone.id,
+                name="Loitering",
+                object_classes="person",
+                after_hours_only=False,
+                risk_threshold=70.0,
+                consecutive_required=3,
             )
         )
         db.commit()
@@ -185,7 +141,9 @@ def seed() -> None:
         print("Seed data created:")
         print("  admin@sentinelai.dev / Admin123!")
         print("  analyst@sentinelai.dev / Analyst123!")
-        print(f"  camera_id={camera.id}, zone_id={zone.id}, rule_id={rule.id}, incident_id={incident.id}")
+        for camera in cameras:
+            print(f"  camera_id={camera.id} ({camera.name})")
+        print("Start monitoring any of them from the Cameras page.")
 
     finally:
         db.close()

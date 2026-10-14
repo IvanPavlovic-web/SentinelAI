@@ -1,12 +1,12 @@
 """
-project.py — CS50P Final Project
+project.py - CS50P Final Project
 SentinelAI: Edge Video Intelligence & Incident Detection Platform
 
 This module contains the pure, dependency-free "brain" of SentinelAI's
-incident-detection pipeline: the STAR-Risk scoring algorithm, the incident
-hysteresis check, a motion-anomaly estimator used as an input to STAR-Risk,
-and a video-chunking helper used by the backend's worker pool to split long
-videos into parallelizable segments.
+incident-detection pipeline: the risk-scoring algorithm, the incident
+hysteresis check, a motion-anomaly estimator used as an input to risk
+scoring, and a video-chunking helper used by the backend's worker pool to
+split long videos into parallelizable segments.
 
 Everything in this file uses only the Python standard library so that it can
 be graded/run with `python project.py` and `pytest test_project.py` with no
@@ -23,7 +23,7 @@ import sys
 
 
 # --------------------------------------------------------------------------
-# STAR-Risk: Severity / Temporal / Anomaly / Risk scoring
+# Risk scoring
 # --------------------------------------------------------------------------
 
 _ZONE_SEVERITY_MAP = {
@@ -34,7 +34,7 @@ _ZONE_SEVERITY_MAP = {
 }
 
 
-def calculate_star_risk(
+def calculate_risk(
     zone_severity: str | None,
     dwell_seconds: float,
     minimum_dwell_seconds: float,
@@ -44,10 +44,9 @@ def calculate_star_risk(
     previous_risk: float = 0.0,
     alpha: float = 0.45,
 ) -> float:
-    """Compute the STAR-Risk score (0..100) for a single tracked object.
-
-    STAR-Risk = Zone severity, Temporal context, Anomaly (motion), Risk
-    persistence (confidence). The formula is an exponentially-smoothed
+    """Compute the risk score (0..100) for a single tracked object, combining
+    zone severity, dwell time, motion anomaly, time-of-day, and detection-
+    confidence persistence. The formula is an exponentially-smoothed
     weighted sum:
 
         raw_risk = 100 * (0.35*Z + 0.25*D + 0.20*M + 0.10*T + 0.10*C)
@@ -276,7 +275,7 @@ def _run_demo_risk() -> None:
     """Scripted demo: a track that loiters in a high-security zone after
     hours, with increasingly erratic movement, until it crosses the
     incident threshold."""
-    print("SentinelAI STAR-Risk demo — Track #14 in 'High Security Warehouse'\n")
+    print("SentinelAI Risk demo - Track #14 in 'High Security Warehouse'\n")
 
     zone_severity = "high"
     minimum_dwell = 10.0
@@ -298,7 +297,7 @@ def _run_demo_risk() -> None:
 
     for dwell, anomaly, confidence in observations:
         confidence_history.append(confidence)
-        risk = calculate_star_risk(
+        risk = calculate_risk(
             zone_severity=zone_severity,
             dwell_seconds=dwell,
             minimum_dwell_seconds=minimum_dwell,
@@ -310,7 +309,7 @@ def _run_demo_risk() -> None:
         risk_history.append(risk)
         previous_risk = risk
         print(f"  t={dwell:5.1f}s  anomaly={anomaly:.2f}  confidence={confidence:.2f}"
-              f"  -> STAR-Risk={risk:5.1f}")
+              f"  -> Risk={risk:5.1f}")
 
     triggered = is_incident_triggered(risk_history, threshold, consecutive_required=2)
     final_risk = risk_history[-1]
@@ -320,11 +319,11 @@ def _run_demo_risk() -> None:
         print(
             f"INCIDENT: Person track #14 entered the High Security Warehouse zone "
             f"after hours and loitered for {observations[-1][0]:.0f}s with erratic "
-            f"movement, producing a STAR-Risk score of {final_risk:.1f} "
+            f"movement, producing a Risk score of {final_risk:.1f} "
             f"(threshold {threshold:.0f})."
         )
     else:
-        print(f"No incident triggered. Final STAR-Risk score: {final_risk:.1f}")
+        print(f"No incident triggered. Final Risk score: {final_risk:.1f}")
 
 
 def _run_split_video(duration: float, chunk_size: int) -> None:
@@ -350,11 +349,11 @@ def _run_serve() -> None:
 def main():
     parser = argparse.ArgumentParser(
         prog="project.py",
-        description="SentinelAI STAR-Risk CLI (CS50P final project core module).",
+        description="SentinelAI Risk CLI (CS50P final project core module).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("demo-risk", help="Run a scripted STAR-Risk incident demo.")
+    subparsers.add_parser("demo-risk", help="Run a scripted Risk incident demo.")
 
     split_parser = subparsers.add_parser("split-video", help="Split a video duration into processing chunks.")
     split_parser.add_argument("--duration", type=float, required=True, help="Total video duration in seconds.")

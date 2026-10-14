@@ -39,7 +39,7 @@ export default function VideoLibrary() {
         headers: { "Content-Type": "multipart/form-data" },
         // No axios timeout is set globally, and large footage (multi-GB,
         // multi-hour recordings) can legitimately take a long time to
-        // transfer — progress feedback matters more here than a timeout.
+        // transfer, so progress feedback matters more here than a timeout.
         onUploadProgress: (evt) => {
           if (evt.total) {
             setProgress(Math.round((evt.loaded / evt.total) * 100));
@@ -50,7 +50,7 @@ export default function VideoLibrary() {
     },
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ["videos"] });
-      // Jump straight to the video's live analysis view — processing has
+      // Jump straight to the video's live analysis view: processing has
       // already been queued by the upload endpoint, so the user watches
       // detection happen in real time instead of waiting on this list.
       navigate(`/videos/${res.data.video_source.id}`);
@@ -120,7 +120,7 @@ export default function VideoLibrary() {
       {uploading && (
         <div className="bg-ops-panel border border-ops-border rounded-lg px-5 py-4">
           <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-            <span>Transferring to server — no file-size limit applies</span>
+            <span>Transferring to server, no file-size limit applies</span>
             <span className="tabular">
               {uploadSize ? `${formatBytes(uploadSize.loaded)} / ${formatBytes(uploadSize.total)}` : ""}
             </span>

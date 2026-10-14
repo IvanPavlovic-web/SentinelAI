@@ -37,7 +37,7 @@ class Track:
     @property
     def dominant_color(self) -> str:
         """The most frequently observed color across this track's history
-        so far — far more stable for narration than any single frame's
+        so far, far more stable for narration than any single frame's
         color, which can flicker with lighting/shadow."""
         if not self.colors:
             return "unknown"
@@ -68,6 +68,13 @@ def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, flo
 
 def _centroid_distance(c1: tuple[float, float], c2: tuple[float, float]) -> float:
     return ((c1[0] - c2[0]) ** 2 + (c1[1] - c2[1]) ** 2) ** 0.5
+
+
+# Public alias: app/workers/tracking_pipeline.py uses this to associate a
+# weapon-class track with its nearest person track (see
+# associate_weapons_to_people), without reaching into this module's
+# internals.
+centroid_distance = _centroid_distance
 
 
 class CentroidIoUTracker:

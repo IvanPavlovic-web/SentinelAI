@@ -19,8 +19,8 @@ def get_job(job_id: int, db: Session = Depends(get_db), current_user=Depends(get
 
 @router.get("/{job_id}/detections")
 def get_job_detections(job_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    """What the pipeline actually found in the footage for this job — object
-    classes and counts, and per-track detail — independent of whether any
+    """What the pipeline actually found in the footage for this job: object
+    classes and counts, and per-track detail, independent of whether any
     zone/rule triggered an incident. Safe to poll while a job is still
     processing; rows are written incrementally."""
     return job_service.get_job_detections(db, job_id)
@@ -34,7 +34,7 @@ def get_annotated_video(
     current_user=Depends(get_current_user_for_streaming),
 ):
     """The source video re-rendered with detection boxes/track IDs/risk
-    scores burned in — exactly what the AI found, frame by frame. Only
+    scores burned in, exactly what the AI found, frame by frame. Only
     available once the job's tracking pass has finished."""
     job = job_service.get_job(db, job_id)
     if not job.annotated_path:
@@ -44,7 +44,7 @@ def get_annotated_video(
 
 @router.get("/{job_id}/events")
 def get_job_events(job_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    """Full live-activity narration log for this job, oldest first — what
+    """Full live-activity narration log for this job, oldest first: what
     the Video Detail page's activity panel replays for a completed job.
     Safe to call mid-processing too; rows are written incrementally."""
     return job_service.get_job_events(db, job_id)

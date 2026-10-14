@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
 from app.models.camera import JobStatus, ProcessingJob, VideoSource
@@ -31,7 +31,7 @@ def save_upload(upload_dir: Path, file: UploadFile) -> tuple[str, str, int]:
 
     size = 0
     # MAX_UPLOAD_SIZE_MB == 0 means unlimited (streamed straight to disk in
-    # fixed-size chunks below, so there is no in-memory ceiling either way —
+    # fixed-size chunks below, so there is no in-memory ceiling either way;
     # this only guards against accidentally filling the uploads volume).
     max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024 if settings.MAX_UPLOAD_SIZE_MB > 0 else None
     with open(file_path, "wb") as out:
@@ -116,12 +116,23 @@ def delete_video(db: Session, video_id: int) -> None:
     video = get_video(db, video_id)
 
     jobs = db.query(ProcessingJob).filter(ProcessingJob.video_source_id == video_id).all()
+    job_ids = [job.id for job in jobs]
 
     paths_to_remove: list[str] = [video.file_path]
     for job in jobs:
         if job.annotated_path:
             paths_to_remove.append(job.annotated_path)
-        incidents = db.query(Incident).filter(Incident.processing_job_id == job.id).all()
+
+    # One query (plus one selectinload for .evidence) for every incident
+    # across every job, instead of one incidents query per job and then
+    # one more lazy-loaded query per incident for its evidence.
+    if job_ids:
+        incidents = (
+            db.query(Incident)
+            .filter(Incident.processing_job_id.in_(job_ids))
+            .options(selectinload(Incident.evidence))
+            .all()
+        )
         for incident in incidents:
             for evidence in incident.evidence:
                 paths_to_remove.append(evidence.frame_path)

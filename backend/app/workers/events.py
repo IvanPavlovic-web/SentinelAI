@@ -1,8 +1,8 @@
 """Live activity-log generation.
 
-Turns raw per-observation signals (STAR-Risk score, motion-anomaly score,
+Turns raw per-observation signals (Risk score, motion-anomaly score,
 detected object class, dominant color, on-screen position, movement
-direction) into a throttled stream of human-readable ActivityEvent rows —
+direction) into a throttled stream of human-readable ActivityEvent rows:
 "A red car appeared in the right side of the frame", "Person #2 is moving
 erratically", a risk-severity escalation, a weapon-class detection, a
 movement-direction change, or a periodic "still visible, normal"
@@ -30,7 +30,7 @@ def classify_severity(risk_score: float) -> str:
 
 
 def _subject(object_class: str, color: str, track_id: int) -> str:
-    """'a red car (#3)' / 'a person (#1)' — color is skipped when unknown
+    """'a red car (#3)' / 'a person (#1)': color is skipped when unknown
     (e.g. a person's clothing varies too much for a single crop median to
     be meaningful) rather than ever inventing an attribute."""
     if color and color != "unknown":
@@ -52,7 +52,7 @@ class _TrackState:
 class ActivityEventGenerator:
     """Call `observe(...)` once per tracked detection, in increasing
     timestamp order. Returns a list of (event_type, severity, description)
-    tuples to persist — usually empty, since most observations don't
+    tuples to persist, usually empty, since most observations don't
     warrant a new narration line."""
 
     track_states: dict[int, _TrackState] = field(default_factory=dict)
@@ -67,6 +67,7 @@ class ActivityEventGenerator:
         dominant_color: str = "unknown",
         position: str = "the frame",
         movement: str = "stationary",
+        concurrent_count: int | None = None,
     ) -> list[tuple[str, str, str]]:
         state = self.track_states.setdefault(track_id, _TrackState())
         events: list[tuple[str, str, str]] = []
@@ -76,16 +77,18 @@ class ActivityEventGenerator:
         is_weapon = object_class.lower() in settings.weapon_class_names_set
         is_anomalous = motion_anomaly >= settings.ANOMALY_EVENT_THRESHOLD
 
-        # First-ever sighting of this track: a full scene description —
-        # what it is, what color, where it appeared.
+        # First-ever sighting of this track: a full scene description,
+        # what it is, what color, where it appeared. When other tracks of
+        # the same class are active at the same time (concurrent_count),
+        # call that out explicitly -- each one still narrates separately
+        # by its own ID/color/position/movement, this line just makes the
+        # "there are several, and they're tracked individually" fact explicit.
         if not state.seen:
-            events.append(
-                (
-                    "sighting",
-                    severity,
-                    f"{subject.capitalize()} appeared in {position}.",
-                )
-            )
+            sighting_text = f"{subject.capitalize()} appeared in {position}."
+            if concurrent_count and concurrent_count > 1:
+                plural = "people" if object_class == "person" else f"{object_class}s"
+                sighting_text += f" {concurrent_count} {plural} are in view at once, each tracked separately by ID, color, and position."
+            events.append(("sighting", severity, sighting_text))
             state.seen = True
             state.last_movement = movement
 
@@ -105,12 +108,12 @@ class ActivityEventGenerator:
                     "anomaly",
                     severity if _SEVERITY_RANK[severity] >= _SEVERITY_RANK["medium"] else "medium",
                     f"{subject.capitalize()} is moving erratically in {position} "
-                    f"(anomaly score {motion_anomaly:.2f}) — possible suspicious behavior.",
+                    f"(anomaly score {motion_anomaly:.2f}), possible suspicious behavior.",
                 )
             )
         state.last_anomaly_flagged = is_anomalous
 
-        # Movement-direction change: "if it moves, report it" — but only
+        # Movement-direction change: "if it moves, report it", but only
         # the transition itself (stationary -> moving, or a change of
         # direction), not every tick, or this would be as noisy as raw
         # per-frame coordinates.
@@ -130,7 +133,7 @@ class ActivityEventGenerator:
                     "escalation",
                     severity,
                     f"{subject.capitalize()} risk escalated to {severity.upper()} "
-                    f"(STAR-Risk {risk_score:.1f}), {movement} in {position}.",
+                    f"(Risk {risk_score:.1f}), {movement} in {position}.",
                 )
             )
         state.last_severity = severity
@@ -142,7 +145,7 @@ class ActivityEventGenerator:
                     "status",
                     severity,
                     f"{subject.capitalize()} {heartbeat_phrase}, {movement} in {position} "
-                    f"(STAR-Risk {risk_score:.1f}).",
+                    f"(Risk {risk_score:.1f}).",
                 )
             )
 

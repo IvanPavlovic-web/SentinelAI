@@ -20,13 +20,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # SQLAlchemy's Enum(PythonEnumClass) stores the member NAME by default
-    # (not .value) — see job_status/incident_status/etc. in 0001, which are
+    # (not .value); see job_status/incident_status/etc. in 0001, which are
     # all uppercase for the same reason. event_severity must match that
     # convention or every INSERT fails with "invalid input value".
     #
     # Separately: generic sa.Enum's create_type kwarg doesn't reliably
     # suppress the implicit CREATE TYPE that create_table() issues for an
-    # inline enum column — only the Postgres-specific ENUM type honors it,
+    # inline enum column; only the Postgres-specific ENUM type honors it,
     # which is why this uses postgresql.ENUM explicitly for both the
     # standalone create() and the column definition below.
     event_severity = postgresql.ENUM("LOW", "MEDIUM", "HIGH", "CRITICAL", name="event_severity")
