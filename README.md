@@ -365,17 +365,38 @@ STAR-Risk score).
 Alongside the raw class counts, the pipeline generates a human-readable
 narration stream (`app/workers/events.py`, the `ActivityEventGenerator`
 class) as it tracks each object, written to the `activity_events` table
-and rendered on the right-hand panel of the Video Detail page. One instance
-runs per job, fed every observation in temporal order, and emits a new line
-only when something is actually worth saying:
+and rendered on the right-hand panel of the Video Detail page. Descriptions
+aren't just "person track #2" — every line is built from real visual
+attributes extracted per detection (`app/workers/visual_attributes.py`):
 
+- **Color** — the dominant color of each bounding-box crop, classified from
+  the median HSV of a downsampled patch (robust to lighting/shadow; far
+  cheaper than clustering). A track's reported color is the mode across its
+  whole history, not a single noisy frame. *"A red car..."*
+- **Position** — frame-relative thirds, the way a person points at a
+  screen: *"...in the right side of the frame"*, *"...in the top-left of
+  the frame"*, *"...in the center of the frame"*.
+- **Movement** — direction and qualitative speed from the track's recent
+  centroid history: *"moving quickly left"*, *"stationary"*, *"moving
+  slowly downward, toward the bottom of the frame"*.
+
+One `ActivityEventGenerator` instance runs per job, fed every observation
+in temporal order, and emits a new line only when something is actually
+worth saying:
+
+- **Sighting** — the very first observation of a new track, a full scene
+  description: *"A red car (#3) appeared in the right side of the frame."*
+- **Movement** — only on an actual change of direction (not every tick, or
+  this would be as noisy as raw coordinates): *"A red car (#3) is now
+  moving quickly left in the center of the frame."*
 - **Anomaly** — the first observation where a track's motion-anomaly score
   (direction reversals / speed bursts, from `calculate_motion_anomaly`)
-  crosses `ANOMALY_EVENT_THRESHOLD` (default 0.5): *"Person track #2 is
-  moving erratically (anomaly score 1.00) — possible suspicious behavior."*
+  crosses `ANOMALY_EVENT_THRESHOLD` (default 0.5): *"A gray person (#2) is
+  moving erratically in the left side of the frame (anomaly score 1.00) —
+  possible suspicious behavior."*
 - **Escalation** — whenever a track's STAR-Risk severity bucket increases
-  (low → medium → high → critical): *"Person track #2 risk escalated to
-  MEDIUM (STAR-Risk 40.1)."*
+  (low → medium → high → critical): *"...risk escalated to MEDIUM
+  (STAR-Risk 40.1), moving right in the center of the frame."*
 - **Weapon** — any detection whose class name matches `WEAPON_CLASS_NAMES`
   (case-insensitive; default `knife,gun,pistol,rifle,weapon,firearm`),
   always `critical` severity, flagged once per track.
@@ -383,6 +404,11 @@ only when something is actually worth saying:
   (default 3s) per track when nothing else fired, so the log reads as a
   continuous narration rather than only alerts: *"...continues moving
   normally"* at low severity, *"...remains at elevated risk"* otherwise.
+
+The same per-track dominant color is also persisted on `tracked_objects`
+(shown in the Video Detail per-track table) and burned into the annotated
+preview video's overlay labels, so the color mentioned in the narration is
+the same one visible on screen.
 
 Every event is persisted with its severity, timestamp, and the risk score
 that produced it (`GET /api/jobs/{id}/events` replays the full log for a

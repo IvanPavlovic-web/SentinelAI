@@ -128,6 +128,7 @@ def get_job_detections(db: Session, job_id: int) -> dict:
                 "max_confidence": round(agg.max_confidence, 3) if agg else None,
                 "observation_count": agg.observation_count if agg else 0,
                 "final_risk_score": round(t.final_risk_score, 1),
+                "dominant_color": t.dominant_color,
             }
         )
 

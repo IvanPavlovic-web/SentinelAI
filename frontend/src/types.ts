@@ -166,6 +166,7 @@ export interface TrackedObjectSummary {
   max_confidence: number | null;
   observation_count: number;
   final_risk_score: number;
+  dominant_color: string;
 }
 
 export interface JobDetectionsSummary {

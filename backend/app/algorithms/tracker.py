@@ -15,6 +15,7 @@ class Detection:
     y2: float
     confidence: float
     object_class: str
+    dominant_color: str = "unknown"
 
     @property
     def centroid(self) -> tuple[float, float]:
@@ -29,8 +30,18 @@ class Track:
     centroids: list[tuple[float, float]] = field(default_factory=list)
     timestamps: list[float] = field(default_factory=list)
     confidences: list[float] = field(default_factory=list)
+    colors: list[str] = field(default_factory=list)
     missed_frames: int = 0
     active: bool = True
+
+    @property
+    def dominant_color(self) -> str:
+        """The most frequently observed color across this track's history
+        so far — far more stable for narration than any single frame's
+        color, which can flicker with lighting/shadow."""
+        if not self.colors:
+            return "unknown"
+        return max(set(self.colors), key=self.colors.count)
 
 
 def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
@@ -124,6 +135,8 @@ class CentroidIoUTracker:
             track.centroids.append(det.centroid)
             track.timestamps.append(timestamp)
             track.confidences.append(det.confidence)
+            if det.dominant_color != "unknown":
+                track.colors.append(det.dominant_color)
             track.missed_frames = 0
             result[track.track_id] = det
 
@@ -148,6 +161,8 @@ class CentroidIoUTracker:
             new_track.centroids.append(det.centroid)
             new_track.timestamps.append(timestamp)
             new_track.confidences.append(det.confidence)
+            if det.dominant_color != "unknown":
+                new_track.colors.append(det.dominant_color)
             self._tracks[track_id] = new_track
             result[track_id] = det
 

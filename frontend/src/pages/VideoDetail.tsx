@@ -292,6 +292,7 @@ export default function VideoDetail() {
                   <tr>
                     <th className="py-2 pr-2">Track</th>
                     <th className="py-2 pr-2">Class</th>
+                    <th className="py-2 pr-2">Color</th>
                     <th className="py-2 pr-2">Confidence</th>
                     <th className="py-2 pr-2">Observations</th>
                     <th className="py-2">Risk</th>
@@ -302,6 +303,9 @@ export default function VideoDetail() {
                     <tr key={t.track_number} className="border-t border-ops-border">
                       <td className="py-2 pr-2 tabular">#{t.track_number}</td>
                       <td className="py-2 pr-2 capitalize">{t.object_class}</td>
+                      <td className="py-2 pr-2 capitalize text-slate-400">
+                        {t.dominant_color !== "unknown" ? t.dominant_color : "-"}
+                      </td>
                       <td className="py-2 pr-2 tabular">
                         {t.max_confidence !== null ? `${(t.max_confidence * 100).toFixed(0)}%` : "-"}
                       </td>

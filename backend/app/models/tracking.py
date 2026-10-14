@@ -26,6 +26,7 @@ class TrackedObject(Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     final_risk_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    dominant_color: Mapped[str] = mapped_column(String(50), default="unknown", nullable=False)
 
     processing_job: Mapped["ProcessingJob"] = relationship()  # noqa: F821
     observations: Mapped[list["ObjectObservation"]] = relationship(back_populates="tracked_object", cascade="all, delete-orphan")

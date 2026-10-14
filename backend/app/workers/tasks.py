@@ -57,10 +57,11 @@ from app.models.tracking import ActivityEvent, EventSeverity, ObjectObservation,
 from app.models.zone import Rule, Zone
 from app.workers.celery_app import celery_app
 from app.workers.events import ActivityEventGenerator
+from app.workers.visual_attributes import frame_position_label, movement_label
 
 logger = get_logger(__name__)
 
-COCO_RELEVANT_CLASSES = {0: "person", 2: "car", 7: "truck"}
+COCO_RELEVANT_CLASSES = {0: "person", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
 
 @dataclass
@@ -73,6 +74,7 @@ class RawDetection:
     y2: float
     confidence: float
     object_class: str
+    dominant_color: str = "unknown"
 
 
 def _load_yolo_model():
@@ -101,6 +103,8 @@ def _stub_detect(frame, frame_number: int, timestamp: float) -> list[RawDetectio
     x1, y1 = max(0.0, cx - box_w / 2), max(0.0, cy - box_h / 2)
     x2, y2 = min(float(width), cx + box_w / 2), min(float(height), cy + box_h / 2)
     confidence = 0.75 + 0.2 * abs(np.sin(t / 3.0))
+    from app.workers.visual_attributes import classify_dominant_color  # noqa: PLC0415
+
     return [
         RawDetection(
             frame_number=frame_number,
@@ -111,6 +115,7 @@ def _stub_detect(frame, frame_number: int, timestamp: float) -> list[RawDetectio
             y2=float(y2),
             confidence=float(min(confidence, 0.99)),
             object_class="person",
+            dominant_color=classify_dominant_color(frame, x1, y1, x2, y2),
         )
     ]
 
@@ -163,6 +168,8 @@ def _process_chunk(
                             continue
                         x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
                         conf = float(box.conf[0])
+                        from app.workers.visual_attributes import classify_dominant_color  # noqa: PLC0415
+
                         detections.append(
                             RawDetection(
                                 frame_number=frame_number,
@@ -170,6 +177,7 @@ def _process_chunk(
                                 x1=x1, y1=y1, x2=x2, y2=y2,
                                 confidence=conf,
                                 object_class=COCO_RELEVANT_CLASSES[cls_id],
+                                dominant_color=classify_dominant_color(frame, x1, y1, x2, y2),
                             )
                         )
                 except Exception:  # noqa: BLE001 - inference failure -> fall back for this frame
@@ -238,7 +246,8 @@ def _render_annotated_video(
 
             for box, _ in active.values():
                 x1, y1, x2, y2 = int(box["x1"]), int(box["y1"]), int(box["x2"]), int(box["y2"])
-                label = f"{box['object_class']} #{box['track_id']} {box['confidence'] * 100:.0f}% risk:{box['risk']:.0f}"
+                color_prefix = f"{box['color']} " if box.get("color", "unknown") != "unknown" else ""
+                label = f"{color_prefix}{box['object_class']} #{box['track_id']} {box['confidence'] * 100:.0f}% risk:{box['risk']:.0f}"
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
                 text_y = max(y1 - 8, 14)
                 # Black outline then white fill so the label reads on any background.
@@ -387,7 +396,10 @@ def process_video_task(self, job_id: int) -> dict:
 
         for ts in sorted(by_timestamp.keys()):
             dets = [
-                Detection(x1=d.x1, y1=d.y1, x2=d.x2, y2=d.y2, confidence=d.confidence, object_class=d.object_class)
+                Detection(
+                    x1=d.x1, y1=d.y1, x2=d.x2, y2=d.y2,
+                    confidence=d.confidence, object_class=d.object_class, dominant_color=d.dominant_color,
+                )
                 for d in by_timestamp[ts]
             ]
             matches = tracker.update(dets, ts)
@@ -441,6 +453,7 @@ def process_video_task(self, job_id: int) -> dict:
                         "track_id": track_id,
                         "confidence": det.confidence,
                         "risk": risk,
+                        "color": track.dominant_color,
                     }
                 )
 
@@ -458,10 +471,20 @@ def process_video_task(self, job_id: int) -> dict:
 
                 tracked_obj_row = db.get(TrackedObject, track_db_ids[track_id])
                 tracked_obj_row.final_risk_score = risk
+                tracked_obj_row.dominant_color = track.dominant_color
                 db.commit()
 
+                position = frame_position_label(centroid[0], centroid[1], width, height)
+                movement = movement_label(track.centroids, track.timestamps)
                 for event_type, severity, description in event_generator.observe(
-                    track_id, det.object_class, risk, motion_anomaly, ts
+                    track_id,
+                    det.object_class,
+                    risk,
+                    motion_anomaly,
+                    ts,
+                    dominant_color=track.dominant_color,
+                    position=position,
+                    movement=movement,
                 ):
                     db.add(
                         ActivityEvent(
