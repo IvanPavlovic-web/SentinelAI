@@ -249,26 +249,52 @@ def process_video_task(self, job_id: int) -> dict:
         chunks = split_video_chunks(max(duration, 1.0), settings.DEFAULT_CHUNK_SECONDS)
 
         all_detections: list[RawDetection] = []
-        with ProcessPoolExecutor(max_workers=min(4, max(1, len(chunks)))) as executor:
-            futures = [
-                executor.submit(
-                    _process_chunk,
-                    video.file_path,
-                    start,
-                    end,
-                    fps,
-                    settings.FRAME_SAMPLE_RATE,
-                    settings.YOLO_MODEL_PATH,
-                )
-                for start, end in chunks
-            ]
-            total = len(futures)
-            for i, future in enumerate(futures):
+        total = len(chunks)
+        # Celery's default "prefork" pool runs each task inside a daemonic
+        # worker process, and CPython forbids a daemonic process from
+        # spawning children — so ProcessPoolExecutor.submit() raises
+        # AssertionError there even though the code itself is correct (see
+        # docker-compose.yml, which runs celery_worker with --pool=threads
+        # specifically to avoid this). If some other deployment still runs
+        # prefork, degrade to sequential in-process execution instead of
+        # failing the whole job outright.
+        try:
+            with ProcessPoolExecutor(max_workers=min(4, max(1, total))) as executor:
+                futures = [
+                    executor.submit(
+                        _process_chunk,
+                        video.file_path,
+                        start,
+                        end,
+                        fps,
+                        settings.FRAME_SAMPLE_RATE,
+                        settings.YOLO_MODEL_PATH,
+                    )
+                    for start, end in chunks
+                ]
+                for i, future in enumerate(futures):
+                    t0 = time.time()
+                    chunk_results = future.result()
+                    latencies_ms.append((time.time() - t0) * 1000)
+                    all_detections.extend(RawDetection(**d) for d in chunk_results)
+                    job.progress_percent = round(((i + 1) / total) * 90.0, 2)  # reserve last 10% for post-processing
+                    db.commit()
+        except (AssertionError, OSError) as exc:
+            logger.warning(
+                "ProcessPoolExecutor unavailable (%s); falling back to sequential "
+                "chunk processing. Run the celery worker with --pool=threads to "
+                "get real parallel chunk processing.",
+                exc,
+            )
+            all_detections = []
+            for i, (start, end) in enumerate(chunks):
                 t0 = time.time()
-                chunk_results = future.result()
+                chunk_results = _process_chunk(
+                    video.file_path, start, end, fps, settings.FRAME_SAMPLE_RATE, settings.YOLO_MODEL_PATH
+                )
                 latencies_ms.append((time.time() - t0) * 1000)
                 all_detections.extend(RawDetection(**d) for d in chunk_results)
-                job.progress_percent = round(((i + 1) / total) * 90.0, 2)  # reserve last 10% for post-processing
+                job.progress_percent = round(((i + 1) / total) * 90.0, 2)
                 db.commit()
 
         all_detections.sort(key=lambda d: d.timestamp)

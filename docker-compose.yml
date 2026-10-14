@@ -85,12 +85,18 @@ services:
         condition: service_healthy
       backend:
         condition: service_started
-    # --max-tasks-per-child recycles worker subprocesses periodically so a
-    # long day of heavy video jobs can't accumulate memory; concurrency is
-    # configurable per-deployment via CELERY_WORKER_CONCURRENCY.
+    # --pool=threads (not the default "prefork") is required here: each
+    # video-processing task itself spawns a ProcessPoolExecutor to
+    # parallelize frame/inference work across chunks, and CPython refuses
+    # to let a daemonic process (which is what prefork pool workers are)
+    # spawn children of its own — that combination fails immediately with
+    # "daemonic processes are not allowed to have children". Threads don't
+    # have that restriction. (--max-tasks-per-child is prefork-only and
+    # dropped accordingly; worker memory is bounded by each task's own
+    # ProcessPoolExecutor exiting its subprocesses when done.)
     command: >
-      celery -A app.workers.celery_app worker --loglevel=info
-      --concurrency=${CELERY_WORKER_CONCURRENCY:-4} --max-tasks-per-child=50
+      celery -A app.workers.celery_app worker --loglevel=info --pool=threads
+      --concurrency=${CELERY_WORKER_CONCURRENCY:-4}
 
   frontend:
     build:
