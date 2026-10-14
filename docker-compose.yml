@@ -39,6 +39,9 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       UPLOAD_DIR: /app/uploads
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-0}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-40}
     volumes:
       - uploads_data:/app/uploads
     ports:
@@ -53,8 +56,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    # --limit-max-requests/--timeout-keep-alive raised beyond uvicorn's
+    # defaults so a single large-file upload request is never dropped early;
+    # uvicorn itself has no request body size ceiling.
     command: >
-      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 3600 --workers ${UVICORN_WORKERS:-2}"
 
   celery_worker:
     build:
@@ -68,6 +74,8 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       UPLOAD_DIR: /app/uploads
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-40}
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -77,8 +85,12 @@ services:
         condition: service_healthy
       backend:
         condition: service_started
+    # --max-tasks-per-child recycles worker subprocesses periodically so a
+    # long day of heavy video jobs can't accumulate memory; concurrency is
+    # configurable per-deployment via CELERY_WORKER_CONCURRENCY.
     command: >
-      celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+      celery -A app.workers.celery_app worker --loglevel=info
+      --concurrency=${CELERY_WORKER_CONCURRENCY:-4} --max-tasks-per-child=50
 
   frontend:
     build:
@@ -92,6 +104,23 @@ services:
       - "5173:5173"
     depends_on:
       - backend
+
+  # Production-grade entrypoint: terminates client connections with an
+  # explicitly unlimited request body size and long read/send timeouts, so
+  # multi-gigabyte footage uploads and long-lived WebSocket connections are
+  # never silently capped by a reverse proxy default. Optional for local
+  # dev (hit backend/frontend ports directly instead), but this is the
+  # service a real deployment should sit behind.
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
 
 volumes:
   postgres_data:

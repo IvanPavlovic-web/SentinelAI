@@ -356,11 +356,50 @@ All variables live in `.env.example` (copy to `.env`). Key ones:
 | `ACCESS_TOKEN_EXPIRE_MINUTES` / `REFRESH_TOKEN_EXPIRE_DAYS` | Token lifetimes | `30` / `7` |
 | `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` | Redis connections for Celery | `redis://redis:6379/0,1` |
 | `CORS_ORIGINS` | Allowed frontend origins | `http://localhost:5173,http://localhost:3000` |
-| `UPLOAD_DIR`, `MAX_UPLOAD_SIZE_MB`, `ALLOWED_VIDEO_EXTENSIONS` | Upload validation | `/app/uploads`, `500`, `.mp4,.avi,.mov,.mkv` |
+| `UPLOAD_DIR`, `MAX_UPLOAD_SIZE_MB`, `ALLOWED_VIDEO_EXTENSIONS` | Upload validation — `MAX_UPLOAD_SIZE_MB=0` means unlimited | `/app/uploads`, `0`, `.mp4,.avi,.mov,.mkv,.ts,.mxf,.webm` |
+| `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT_SECONDS`, `DB_POOL_RECYCLE_SECONDS` | PostgreSQL connection pool sizing | `20`, `40`, `30`, `1800` |
+| `CELERY_WORKER_CONCURRENCY` | Parallel worker subprocesses per `celery_worker` container | `4` |
+| `CELERY_TASK_SOFT_TIME_LIMIT_SECONDS` / `CELERY_TASK_TIME_LIMIT_SECONDS` | Ceiling for a single video-processing job | `21600` (6h) / `23400` (6.5h) |
+| `UVICORN_WORKERS` | API process count (separate from Celery concurrency) | `2` |
 | `DEFAULT_CHUNK_SECONDS`, `FRAME_SAMPLE_RATE` | Pipeline tuning | `30`, `5` |
 | `YOLO_MODEL_PATH` | YOLO weights (falls back to stub detector if unavailable) | `yolov8n.pt` |
 | `INCIDENT_RISK_THRESHOLD`, `INCIDENT_CONSECUTIVE_REQUIRED` | Default rule thresholds | `70.0`, `3` |
 | `VITE_API_BASE_URL`, `VITE_WS_BASE_URL` | Frontend → backend endpoints | `http://localhost:8000`, `ws://localhost:8000` |
+
+### Scaling for large deployments
+
+SentinelAI's defaults are tuned for a multi-camera, multi-operator
+deployment rather than a single local demo:
+
+- **Uploads are unbounded by default** (`MAX_UPLOAD_SIZE_MB=0`). The upload
+  handler always streams straight to disk in 8MB chunks (`video_service.
+  save_upload`) — it never buffers a file fully in memory, so there's no
+  practical ceiling besides the disk space backing the `uploads` volume.
+  Raise/lower the cap per-deployment if you want one.
+- **An `nginx` reverse proxy** (`nginx/nginx.conf`) sits in front of the
+  stack on port 80 with `client_max_body_size 0` (unlimited) and 3600s
+  read/send timeouts, so a reverse proxy never becomes the thing that
+  silently truncates a multi-gigabyte upload or a long-lived WebSocket
+  connection — a very common production gotcha. Point real traffic at port
+  80 instead of hitting the backend/frontend ports directly.
+  `docker compose up` already starts it alongside the rest of the stack.
+- **The PostgreSQL connection pool** is sized for many concurrent
+  dashboard/API/WebSocket clients (`DB_POOL_SIZE=20`, `DB_MAX_OVERFLOW=40`
+  by default), not the handful of connections a single-user demo needs.
+- **Celery** runs with `CELERY_WORKER_CONCURRENCY=4` parallel subprocesses,
+  `--max-tasks-per-child=50` (recycles workers so long-running batches of
+  heavy video jobs can't accumulate memory), `task_acks_late=True` (a job
+  re-queues instead of being lost if a worker is killed mid-processing),
+  and multi-hour soft/hard time limits so long camera footage isn't killed
+  partway through. Scale `CELERY_WORKER_CONCURRENCY` or add more
+  `celery_worker` replicas to match your camera count.
+- **`uvicorn`** runs with multiple worker processes (`UVICORN_WORKERS`,
+  default 2) and a 3600s keep-alive timeout for large uploads.
+
+None of this requires a GPU or paid infrastructure — it's standard Docker
+Compose scaling knobs, all exposed as environment variables so a real
+deployment can be sized to its camera count and traffic without touching
+code.
 
 ## Running with Docker Compose
 
@@ -369,13 +408,16 @@ cp .env.example .env            # adjust JWT_SECRET etc. for anything beyond loc
 docker compose up --build
 ```
 
-This starts 5 services: `postgres`, `redis`, `backend` (FastAPI on port
-8000, which runs `alembic upgrade head` automatically before `uvicorn`
-starts), `celery_worker` (same image, different command), and `frontend`
-(port 5173).
+This starts 6 services: `postgres`, `redis`, `backend` (FastAPI, which runs
+`alembic upgrade head` automatically before `uvicorn` starts),
+`celery_worker`, `frontend`, and `nginx` — a reverse proxy in front of
+everything with an unlimited request body size and long timeouts (see
+[Scaling for large deployments](#scaling-for-large-deployments)).
 
-- Backend / Swagger docs: **http://localhost:8000/docs**
-- Frontend dashboard: **http://localhost:5173**
+- Everything through the proxy: **http://localhost** (dashboard at `/`,
+  API at `/api/*`, docs at `/docs`, WebSockets at `/ws/*`)
+- Backend / Swagger docs directly: **http://localhost:8000/docs**
+- Frontend dashboard directly: **http://localhost:5173**
 
 Seed the database with demo data (works without processing a real video):
 

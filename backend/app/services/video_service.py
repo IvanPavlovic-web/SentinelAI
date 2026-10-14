@@ -29,11 +29,14 @@ def save_upload(upload_dir: Path, file: UploadFile) -> tuple[str, str, int]:
     file_path = upload_dir / stored_filename
 
     size = 0
-    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    # MAX_UPLOAD_SIZE_MB == 0 means unlimited (streamed straight to disk in
+    # fixed-size chunks below, so there is no in-memory ceiling either way —
+    # this only guards against accidentally filling the uploads volume).
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024 if settings.MAX_UPLOAD_SIZE_MB > 0 else None
     with open(file_path, "wb") as out:
-        while chunk := file.file.read(1024 * 1024):
+        while chunk := file.file.read(8 * 1024 * 1024):
             size += len(chunk)
-            if size > max_bytes:
+            if max_bytes is not None and size > max_bytes:
                 out.close()
                 file_path.unlink(missing_ok=True)
                 raise HTTPException(
