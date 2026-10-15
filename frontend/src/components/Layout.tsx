@@ -6,6 +6,7 @@ const navItems = [
   { to: "/cameras", label: "Cameras" },
   { to: "/videos", label: "Video Library" },
   { to: "/incidents", label: "Incidents" },
+  { to: "/analytics", label: "Analytics" },
   { to: "/performance", label: "Performance" },
   { to: "/audit-logs", label: "Audit Logs", adminOnly: true },
 ];

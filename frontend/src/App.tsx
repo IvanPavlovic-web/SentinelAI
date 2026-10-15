@@ -10,6 +10,7 @@ import Cameras from "./pages/Cameras";
 import CameraDetail from "./pages/CameraDetail";
 import Incidents from "./pages/Incidents";
 import Performance from "./pages/Performance";
+import Analytics from "./pages/Analytics";
 import AuditLogs from "./pages/AuditLogs";
 
 export default function App() {
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="/videos" element={<VideoLibrary />} />
           <Route path="/videos/:id" element={<VideoDetail />} />
           <Route path="/incidents" element={<Incidents />} />
+          <Route path="/analytics" element={<Analytics />} />
           <Route path="/performance" element={<Performance />} />
           <Route path="/audit-logs" element={<AuditLogs />} />
         </Route>

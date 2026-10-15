@@ -53,6 +53,65 @@ def get_summary(db: Session) -> dict:
     }
 
 
+def get_incident_analytics(db: Session, days: int = 14) -> dict:
+    """Aggregated incident breakdowns for trend/heatmap-style views: when
+    incidents happen (hour of day, daily trend), where (camera), and what
+    (object class). Each breakdown is one grouped query -- real counts
+    straight from the database, nothing computed by paging through rows in
+    Python."""
+    hour = func.extract("hour", Incident.detected_at).label("hour")
+    by_hour = [
+        {"hour": int(h), "count": count}
+        for h, count in db.query(hour, func.count(Incident.id)).group_by(hour).order_by(hour).all()
+    ]
+
+    by_camera = [
+        {
+            "camera_id": camera_id,
+            "camera_name": camera_name,
+            "count": count,
+            "avg_risk_score": round(avg_risk, 1) if avg_risk is not None else 0.0,
+        }
+        for camera_id, camera_name, count, avg_risk in (
+            db.query(Incident.camera_id, Camera.name, func.count(Incident.id), func.avg(Incident.risk_score))
+            .join(Camera, Incident.camera_id == Camera.id)
+            .group_by(Incident.camera_id, Camera.name)
+            .order_by(func.count(Incident.id).desc())
+            .all()
+        )
+    ]
+
+    by_object_class = [
+        {"object_class": object_class, "count": count}
+        for object_class, count in (
+            db.query(Incident.object_class, func.count(Incident.id))
+            .group_by(Incident.object_class)
+            .order_by(func.count(Incident.id).desc())
+            .all()
+        )
+    ]
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    day = func.date(Incident.detected_at).label("day")
+    by_day = [
+        {"date": d.isoformat() if hasattr(d, "isoformat") else str(d), "count": count}
+        for d, count in (
+            db.query(day, func.count(Incident.id))
+            .filter(Incident.detected_at >= since)
+            .group_by(day)
+            .order_by(day)
+            .all()
+        )
+    ]
+
+    return {
+        "by_hour": by_hour,
+        "by_camera": by_camera,
+        "by_object_class": by_object_class,
+        "by_day": by_day,
+    }
+
+
 def get_performance(db: Session, limit: int = 50) -> list[dict]:
     rows = (
         db.query(PerformanceMetric)

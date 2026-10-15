@@ -154,6 +154,35 @@ export interface DashboardSummary {
   incidents_by_priority: Record<string, number>;
 }
 
+export interface HourlyIncidentCount {
+  hour: number;
+  count: number;
+}
+
+export interface CameraIncidentCount {
+  camera_id: number;
+  camera_name: string;
+  count: number;
+  avg_risk_score: number;
+}
+
+export interface ObjectClassIncidentCount {
+  object_class: string;
+  count: number;
+}
+
+export interface DailyIncidentCount {
+  date: string;
+  count: number;
+}
+
+export interface IncidentAnalytics {
+  by_hour: HourlyIncidentCount[];
+  by_camera: CameraIncidentCount[];
+  by_object_class: ObjectClassIncidentCount[];
+  by_day: DailyIncidentCount[];
+}
+
 export type EventSeverity = "low" | "medium" | "high" | "critical";
 
 export interface ActivityEvent {

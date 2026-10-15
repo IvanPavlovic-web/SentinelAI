@@ -29,3 +29,32 @@ class PerformancePoint(BaseModel):
 
 class DashboardPerformance(BaseModel):
     points: list[PerformancePoint]
+
+
+class HourlyIncidentCount(BaseModel):
+    hour: int  # 0-23, UTC
+    count: int
+
+
+class CameraIncidentCount(BaseModel):
+    camera_id: int
+    camera_name: str
+    count: int
+    avg_risk_score: float
+
+
+class ObjectClassIncidentCount(BaseModel):
+    object_class: str
+    count: int
+
+
+class DailyIncidentCount(BaseModel):
+    date: str  # YYYY-MM-DD, UTC
+    count: int
+
+
+class IncidentAnalytics(BaseModel):
+    by_hour: list[HourlyIncidentCount]
+    by_camera: list[CameraIncidentCount]
+    by_object_class: list[ObjectClassIncidentCount]
+    by_day: list[DailyIncidentCount]

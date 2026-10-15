@@ -405,6 +405,7 @@ PATCH  /api/incidents/{id}/status
 
 GET    /api/dashboard/summary
 GET    /api/dashboard/performance
+GET    /api/dashboard/analytics    (incidents by hour/day/camera/class, ?days=)
 GET    /api/audit-logs         (admin-only, paginated)
 
 WS     /ws/jobs/{job_id}       (live processing progress)
@@ -428,8 +429,11 @@ activity log, linked incidents scoped to that camera), Video Library
 (upload + processing status + delete), Video Detail (annotated preview,
 detections panel, linked incidents scoped to that video's job, delete),
 Incidents (filterable table with a resolve/dismiss workflow and an alert-
-delivery column), Performance (latency/FPS/queue/CPU/RAM charts via
-Recharts), and an admin-only Audit Logs page. Data is fetched with
+delivery column), Analytics (incidents by hour-of-day and daily trend,
+broken down by camera and object class -- real aggregate queries, not
+anything computed client-side), Performance (latency/FPS/queue/CPU/RAM
+charts via Recharts), and an admin-only Audit Logs page. Data is fetched
+with
 TanStack Query, navigation uses React Router, and job progress/incidents
 arrive live through a WebSocket hook. Zone/rule management (the polygons
 and thresholds behind Risk's zone-severity term) is drawn directly on a
