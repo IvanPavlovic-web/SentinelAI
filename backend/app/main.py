@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import math
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -63,6 +66,37 @@ app.include_router(alerts.router)
 app.include_router(zones.router)
 app.include_router(rules.router)
 app.include_router(websocket_router)
+
+
+def _sanitize_for_json(value: Any) -> Any:
+    """Recursively makes a Pydantic/FastAPI validation-error payload safe
+    to pass to Starlette's JSONResponse (which calls json.dumps with the
+    strict, spec-compliant allow_nan=False). Two distinct ways this
+    otherwise breaks, both confirmed live:
+    1. Non-finite floats (NaN/Infinity/-Infinity): Pydantic happily parses
+       these as valid floats and echoes the original input back in the
+       error's "input" field, which then fails to serialize.
+    2. A @field_validator that raises ValueError (e.g. the zone polygon's
+       range check): Pydantic v2 wraps it as ctx.error holding the actual
+       exception *object*, not its message -- plain json.dumps has no
+       idea how to encode an exception instance at all.
+    Without this, both cases turned what should be a clean 422 into an
+    unhandled 500 (only ever caught by the generic Exception handler
+    below) -- on a field a request had *already failed to validate*."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_for_json(v) for v in value]
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    return str(value)  # anything else json.dumps can't natively encode (e.g. ctx.error's exception object)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": _sanitize_for_json(exc.errors())})
 
 
 @app.exception_handler(Exception)

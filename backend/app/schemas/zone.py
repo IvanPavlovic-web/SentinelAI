@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.zone import ZoneSeverity
+
+# allow_inf_nan=False on every user-supplied float field below: Pydantic
+# otherwise accepts Infinity/NaN as "valid" floats (Python's float type
+# supports them natively), which then flow straight into Postgres and
+# crash later when FastAPI tries to serialize them back in a response
+# (Starlette's JSONResponse uses allow_nan=False, so this previously
+# surfaced as an unhandled 500 on an already-persisted row, not a clean
+# rejection at input time).
 
 
 class ZoneCreate(BaseModel):
@@ -12,7 +20,7 @@ class ZoneCreate(BaseModel):
     name: str
     severity: ZoneSeverity = ZoneSeverity.MEDIUM
     polygon: list[tuple[float, float]]  # normalized [0,1] points
-    minimum_dwell_seconds: float = 10.0
+    minimum_dwell_seconds: float = Field(default=10.0, allow_inf_nan=False)
 
     @field_validator("polygon")
     @classmethod
@@ -29,7 +37,7 @@ class ZoneUpdate(BaseModel):
     name: str | None = None
     severity: ZoneSeverity | None = None
     polygon: list[tuple[float, float]] | None = None
-    minimum_dwell_seconds: float | None = None
+    minimum_dwell_seconds: float | None = Field(default=None, allow_inf_nan=False)
     is_active: bool | None = None
 
 
@@ -52,7 +60,7 @@ class RuleCreate(BaseModel):
     name: str
     object_classes: str = "person"
     after_hours_only: bool = False
-    risk_threshold: float = 70.0
+    risk_threshold: float = Field(default=70.0, allow_inf_nan=False)
     consecutive_required: int = 3
 
 
@@ -60,7 +68,7 @@ class RuleUpdate(BaseModel):
     name: str | None = None
     object_classes: str | None = None
     after_hours_only: bool | None = None
-    risk_threshold: float | None = None
+    risk_threshold: float | None = Field(default=None, allow_inf_nan=False)
     consecutive_required: int | None = None
     is_active: bool | None = None
 
