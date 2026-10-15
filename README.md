@@ -105,7 +105,7 @@ questions:
 | Auth | JWT (access + refresh), `passlib[bcrypt]`, per-route RBAC dependencies |
 | Datastore / queue | PostgreSQL 16, Redis 7 |
 | Background processing | Celery (Redis broker + result backend), `concurrent.futures.ProcessPoolExecutor` |
-| Computer vision | OpenCV (headless), Ultralytics YOLOv8 (CPU, with a stub-detector fallback), NumPy, `psutil` |
+| Computer vision | OpenCV (headless), Ultralytics YOLOv8 (CPU) + a dedicated weapon-detection model, NumPy, `psutil` |
 | Testing | pytest, httpx |
 | Frontend | React 18, Vite, TypeScript, Tailwind CSS, React Router, TanStack Query, Recharts |
 | Infrastructure | Docker, Docker Compose, named volumes, health checks |
@@ -124,7 +124,7 @@ backend (FastAPI)
                                         │
                                         ▼
                                 celery_worker (same image as backend)
-                                  - detection.py: YOLOv8 inference (or stub fallback)
+                                  - detection.py: YOLOv8 + weapon-model inference
                                   - tracker.py: centroid/IoU tracking
                                   - tracking_pipeline.py: Risk scoring,
                                     zone/rule evaluation, narration, incidents
@@ -167,10 +167,11 @@ source of truth.
    frame sampling + YOLO inference for each chunk are distributed across a
    `ProcessPoolExecutor`: real parallelism across CPU cores.
 5. YOLOv8 (CPU, `yolov8n.pt`) detects `person`, `car`, `truck`,
-   `motorcycle`, and `bus`. If the model weights are unavailable (an
-   offline/sandboxed environment), the worker automatically falls back to a
-   deterministic stub detector so the rest of the pipeline keeps working
-   end to end for demo purposes.
+   `motorcycle`, and `bus`. There is no synthetic fallback: if the model
+   weights can't be loaded (an offline environment, a bad
+   `YOLO_MODEL_PATH`), the job fails with that error instead of
+   substituting fabricated detections -- a result this pipeline produces
+   is always something the model actually saw.
 6. Detections from every sampled frame are replayed in timestamp order
    through a `CentroidIoUTracker`, which assigns each object a persistent
    track ID for as long as it stays visible.
@@ -614,7 +615,7 @@ All variables live in `.env.example` (copy to `.env`). Key ones:
 | `UVICORN_WORKERS` | API process count (separate from Celery concurrency) | `2` |
 | `DEFAULT_CHUNK_SECONDS`, `FRAME_SAMPLE_RATE` | Pipeline tuning | `30`, `5` |
 | `LIVE_SESSION_MAX_SECONDS` | Max length of one live-camera task invocation before re-queuing | `300` |
-| `YOLO_MODEL_PATH` | YOLO weights (falls back to stub detector if unavailable) | `yolov8n.pt` |
+| `YOLO_MODEL_PATH` | YOLO weights (the job fails cleanly if these can't be loaded -- no synthetic fallback) | `yolov8n.pt` |
 | `INCIDENT_RISK_THRESHOLD`, `INCIDENT_CONSECUTIVE_REQUIRED` | Default rule thresholds | `70.0`, `3` |
 | `VITE_API_BASE_URL`, `VITE_WS_BASE_URL` | Frontend → backend endpoints | `http://localhost:8000`, `ws://localhost:8000` |
 
@@ -757,11 +758,12 @@ curl -X PATCH localhost:8000/api/incidents/1/status -H "Authorization: Bearer <t
 
 - No GPU is required: the baseline targets CPU inference. YOLOv8n is small
   enough to run on CPU at a reduced frame-sampling rate.
-- If `ultralytics` cannot download the YOLOv8 weights (an offline or
-  sandboxed environment), the worker logs a warning and switches to a
-  deterministic stub detector, so the rest of the pipeline (tracking,
-  zones, Risk, incidents, metrics) still runs end to end for
-  demonstration purposes.
+- If `ultralytics` cannot download the YOLOv8 weights (an offline
+  environment, a bad `YOLO_MODEL_PATH`), the job fails with that error
+  instead of continuing on fabricated data. This is deliberate: a result
+  this pipeline produces should always be something the model actually
+  saw, never a stand-in. Have the weights available (or cached locally)
+  before running a job.
 - WebSocket progress uses per-connection database polling rather than
   Redis pub/sub: simple and reliable for a single backend replica, but not
   horizontally scalable as-is.
@@ -937,8 +939,7 @@ deployments.
 
 **Why a CPU baseline:** the project should run on a laptop or a cheap VPS
 without CUDA. YOLOv8n is small enough to be CPU-viable at low
-frame-sampling rates, and the stub-detector fallback guarantees a working
-demo even fully offline.
+frame-sampling rates, so no GPU is required for a working deployment.
 
 **Why a custom, lightweight tracker instead of a heavy third-party one**
 (e.g. DeepSORT/ByteTrack + a re-identification model): the goal of this

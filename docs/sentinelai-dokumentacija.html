@@ -123,7 +123,7 @@ footer{border-top:1px solid var(--border);margin-top:3rem;padding-top:1.5rem;col
   <div class="arrow">↓ zadatak se stavlja u red (enqueue)</div>
   <div class="step">Redis: Celery broker + result backend</div>
   <div class="arrow">↓ worker preuzima zadatak</div>
-  <div class="step">celery_worker: OpenCV čitanje frejmova → ProcessPoolExecutor (paralelni chunk-ovi) → YOLOv8 (ili stub) → tracker.py → Risk → upis u bazu + evidence frejmovi</div>
+  <div class="step">celery_worker: OpenCV čitanje frejmova → ProcessPoolExecutor (paralelni chunk-ovi) → YOLOv8 + model za oružje → tracker.py → Risk → upis u bazu + evidence frejmovi</div>
 </div>
 <p>Backend je strogo podeljen po slojevima: <code>routers/</code> (samo HTTP ulaz/izlaz), <code>services/</code> (poslovna logika), <code>models/</code> (SQLAlchemy ORM), <code>schemas/</code> (Pydantic validacija), <code>algorithms/</code> (čiste funkcije bez zavisnosti od baze: uključujući Risk i tracker), <code>workers/</code> (Celery zadaci) i <code>websocket/</code> (live ažuriranja). Rute nikad ne sadrže poslovnu logiku direktno: uvek pozivaju odgovarajući servis.</p>
 <div class="note">Ključna odluka: <code>backend/app/algorithms/risk.py</code> ne duplira algoritam: on uvozi tačno iste funkcije iz korenskog <code>project.py</code> (preko <code>sys.path</code>), tako da CS50-ocenjivani modul i produkcioni pipeline dele <strong>jedan</strong> izvor istine.</div>
@@ -137,7 +137,7 @@ footer{border-top:1px solid var(--border);margin-top:3rem;padding-top:1.5rem;col
   <li>Backend šalje Celery zadatak <code>process_video_task(job_id)</code> u Redis red.</li>
   <li>Worker otvara video sa <code>cv2.VideoCapture</code>, čita FPS, širinu, visinu i trajanje, upisuje ih u <code>video_sources</code>.</li>
   <li>Trajanje se deli na "chunk"-ove pomoću <code>split_video_chunks()</code> (npr. 130s video / 30s chunk = 5 delova, poslednji 10s), a uzorkovanje frejmova + YOLO inferenca se raspodeljuju kroz <code>ProcessPoolExecutor</code>: stvarna paralelizacija po CPU jezgrima.</li>
-  <li>YOLOv8 (model <code>yolov8n.pt</code>, CPU) detektuje klase <code>person</code>, <code>car</code>, <code>truck</code>, <code>motorcycle</code>, <code>bus</code>. Ako model nije dostupan (offline okruženje), worker automatski prelazi na deterministički <em>stub</em> detektor kako bi ceo pipeline i dalje radio za demonstraciju.</li>
+  <li>YOLOv8 (model <code>yolov8n.pt</code>, CPU) detektuje klase <code>person</code>, <code>car</code>, <code>truck</code>, <code>motorcycle</code>, <code>bus</code>. Nema sintetičkog fallback-a: ako model nije dostupan (offline okruženje, pogrešan <code>YOLO_MODEL_PATH</code>), posao (job) propada sa tom greškom umjesto da nastavi sa izmišljenim detekcijama -- rezultat ovog pipeline-a je uvijek nešto što je model stvarno vidio.</li>
   <li>Detekcije iz svakog frejma se vraćaju u glavni proces worker-a hronološkim redom i prosleđuju <code>CentroidIoUTracker</code>-u, koji svakom objektu dodeljuje i održava <strong>trajni ID praćenja</strong> dok god je vidljiv.</li>
   <li>Svako zapažanje (centroid, bounding box, pouzdanost, brzina, pravac, da li je unutar zone) se upisuje u <code>object_observations</code>.</li>
   <li>Za svaki trag se evaluiraju aktivne zone i pravila (<code>zones</code>, <code>rules</code>) i računa se Risk skor (vidi sekciju 4).</li>
@@ -308,7 +308,7 @@ python project.py split-video --duration 130 --chunk-size 30</code></pre>
 <div class="note warn">
 <strong>Trenutna ograničenja:</strong>
 <ul style="margin:.5rem 0 0">
-  <li>Ne zahteva GPU: bazno je CPU inferenca (YOLOv8n je dovoljno mali); ako model nije dostupan offline, koristi se deterministički stub detektor.</li>
+  <li>Ne zahteva GPU: bazno je CPU inferenca (YOLOv8n je dovoljno mali); ako model nije dostupan offline, posao propada sa jasnom greškom umjesto da koristi izmišljene detekcije.</li>
   <li>WebSocket napredak koristi polling baze po konekciji (ne Redis pub/sub): jednostavno i pouzdano za jednu instancu backend-a, ali nije horizontalno skalabilno u trenutnom obliku.</li>
   <li>Reprodukcija videa u Video Detail stranici je trenutno placeholder: potrebno je servisiranje statičkih fajlova/potpisanih URL-ova iz <code>uploads/</code>.</li>
 </ul>

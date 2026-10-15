@@ -10,18 +10,20 @@ Two entry points, sharing one detection/tracking/scoring/narration core
   for a bounded session length, continuously refreshing a snapshot preview
   image and re-queuing itself while the camera is still meant to be live.
 
-YOLO availability: both paths try `from ultralytics import YOLO` via
-app.workers.detection.load_yolo_model, and fall back to a deterministic
-synthetic-detection stub if the weights cannot be loaded (e.g. an offline
-sandboxed environment), so the rest of the pipeline (tracking, zones,
-Risk, incidents, narration, metrics) still runs end to end.
+YOLO availability: both paths load the model via
+app.workers.detection.load_yolo_model, which raises if the weights can't
+be loaded (no internet, a bad YOLO_MODEL_PATH, etc.). That exception
+propagates up to this module's own try/except and fails the job with that
+error message -- there is no synthetic-detection fallback; a result this
+pipeline produces is always something the model actually saw.
 
 Weapon detection: COCO (the default YOLO_MODEL_PATH) has no gun/knife
 classes, so both paths also load a second, dedicated weapon-detection
 model (app.workers.detection.load_weapon_model) and run it alongside the
-main model on every sampled frame. Unavailable (no internet, etc.) simply
-means no weapon detections for that session, same graceful-degradation
-approach as the stub detector.
+main model on every sampled frame. Unavailable (no internet, etc.) means
+no weapon detections for that session -- the main model's results are
+still fully real on their own, so this degrades capability rather than
+substituting anything fabricated.
 """
 from __future__ import annotations
 
@@ -241,6 +243,7 @@ def process_live_camera_task(self, job_id: int) -> dict:
     start_time = time.time()
     frames_processed = 0
     latencies_ms: list[float] = []
+    cap = None
 
     try:
         job: ProcessingJob | None = db.get(ProcessingJob, job_id)
@@ -274,7 +277,7 @@ def process_live_camera_task(self, job_id: int) -> dict:
         fps = cap.get(cv2.CAP_PROP_FPS) or 15.0  # many RTSP sources misreport fps; a sane default keeps timestamps usable
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
-        model, is_stub = load_yolo_model(settings.YOLO_MODEL_PATH)
+        model = load_yolo_model(settings.YOLO_MODEL_PATH)
         weapon_model = (
             load_weapon_model(settings.WEAPON_MODEL_REPO_ID, settings.WEAPON_MODEL_FILENAME, settings.WEAPON_MODEL_REPO_TYPE)
             if settings.WEAPON_MODEL_ENABLED
@@ -343,7 +346,7 @@ def process_live_camera_task(self, job_id: int) -> dict:
                     last_processed_frame = frame.copy()
                     ts = now - start_time
                     t0 = time.time()
-                    detections = detect_frame(model, is_stub, frame, frame_number, ts, weapon_model=weapon_model)
+                    detections = detect_frame(model, frame, frame_number, ts, weapon_model=weapon_model)
                     latencies_ms.append((time.time() - t0) * 1000)
                     frames_processed += 1
 
@@ -436,4 +439,6 @@ def process_live_camera_task(self, job_id: int) -> dict:
             clear_live_tracking_state(redis_client, job.id)
         return {"status": "error", "detail": str(exc)}
     finally:
+        if cap is not None:
+            cap.release()
         db.close()
