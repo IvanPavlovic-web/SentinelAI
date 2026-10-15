@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
+import socket
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -9,6 +12,48 @@ from sqlalchemy.orm import Session, aliased
 from app.core.config import settings
 from app.models.camera import Camera, JobStatus, ProcessingJob
 from app.schemas.camera import CameraCreate, CameraUpdate
+
+# Schemes OpenCV/FFmpeg can plausibly need for a real camera stream.
+# Deliberately excludes FFmpeg's non-stream protocol handlers (file:,
+# concat:, subfile:, pipe:, etc.) that read local files or chain requests
+# rather than open a network stream -- those have no legitimate use here
+# and are exactly the kind of thing SSRF/local-file-read abuse looks for.
+_ALLOWED_STREAM_SCHEMES = {"rtsp", "rtsps", "http", "https", "rtmp", "rtmps"}
+
+
+def _validate_stream_url(url: str) -> None:
+    """Rejects a camera URL that can't plausibly be a real camera and is
+    instead a classic SSRF target: a non-stream scheme, or a hostname that
+    resolves to loopback (the server itself) or link-local (includes
+    169.254.169.254, the cloud-metadata address every major provider
+    uses). Private LAN addresses (192.168.x.x, 10.x.x.x) are deliberately
+    still allowed -- that's exactly where this product's real home/office
+    IP cameras live (see README "Live cameras"), so blocking all private
+    ranges would break the core use case, not just attacks."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in _ALLOWED_STREAM_SCHEMES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported stream URL scheme '{scheme or '(none)'}'. Allowed: {sorted(_ALLOWED_STREAM_SCHEMES)}",
+        )
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Stream URL must include a host")
+
+    try:
+        resolved = {info[4][0] for info in socket.getaddrinfo(hostname, None)}
+    except socket.gaierror as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not resolve host '{hostname}'") from exc
+
+    for ip_str in resolved:
+        ip = ipaddress.ip_address(ip_str)
+        if ip.is_loopback or ip.is_link_local:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Stream URL resolves to a loopback or link-local address, which is not allowed",
+            )
 
 
 def list_cameras(db: Session) -> list[Camera]:
@@ -47,6 +92,8 @@ def get_camera(db: Session, camera_id: int) -> Camera:
 
 
 def create_camera(db: Session, payload: CameraCreate, owner_id: int) -> Camera:
+    if payload.rtsp_url:
+        _validate_stream_url(payload.rtsp_url)
     camera = Camera(**payload.model_dump(), owner_id=owner_id)
     db.add(camera)
     db.commit()
@@ -56,7 +103,10 @@ def create_camera(db: Session, payload: CameraCreate, owner_id: int) -> Camera:
 
 def update_camera(db: Session, camera_id: int, payload: CameraUpdate) -> Camera:
     camera = get_camera(db, camera_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("rtsp_url"):
+        _validate_stream_url(data["rtsp_url"])
+    for field, value in data.items():
         setattr(camera, field, value)
     db.commit()
     db.refresh(camera)
@@ -75,6 +125,8 @@ def test_connection(rtsp_url: str) -> dict:
     """Opens the given stream URL just long enough to confirm it works and
     read its basic properties, without starting a monitoring session."""
     import cv2
+
+    _validate_stream_url(rtsp_url)
 
     cap = cv2.VideoCapture(rtsp_url)
     try:
@@ -123,6 +175,7 @@ def start_live_session(db: Session, camera_id: int) -> ProcessingJob:
     camera = get_camera(db, camera_id)
     if not camera.rtsp_url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Camera has no stream URL configured")
+    _validate_stream_url(camera.rtsp_url)  # defense in depth: re-check even an already-stored URL before connecting
     if get_active_job(db, camera_id) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This camera already has an active monitoring session")
 
