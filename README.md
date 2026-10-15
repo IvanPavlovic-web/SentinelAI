@@ -433,13 +433,21 @@ delivery column), Analytics (incidents by hour-of-day and daily trend,
 broken down by camera and object class -- real aggregate queries, not
 anything computed client-side), Performance (latency/FPS/queue/CPU/RAM
 charts via Recharts), and an admin-only Audit Logs page. Data is fetched
-with
-TanStack Query, navigation uses React Router, and job progress/incidents
+with TanStack Query, navigation uses React Router, and job progress/incidents
 arrive live through a WebSocket hook. Zone/rule management (the polygons
 and thresholds behind Risk's zone-severity term) is drawn directly on a
 camera's live view (see Camera Detail above) rather than a separate
 page; the underlying `/api/zones`/`/api/rules` CRUD endpoints remain
 usable directly too.
+
+Every page is route-level code-split (`React.lazy` + a single `Suspense`
+boundary in `App.tsx`): a production build used to ship one ~722KB
+bundle, since every page's code -- including Login/Register, which never
+touch a chart -- loaded `recharts` (the single heaviest dependency, 373KB
+on its own) up front regardless of which page was actually visited.
+Splitting dropped the main bundle to 255KB (84.6KB gzipped), with
+recharts isolated into its own chunk fetched only by the 3 pages
+(Dashboard, Performance, Analytics) that use it.
 
 ### Live annotated preview
 
@@ -802,6 +810,15 @@ curl -X PATCH localhost:8000/api/incidents/1/status -H "Authorization: Bearer <t
   pretrained open-source checkpoint for that exists as of this writing.
   Point `WEAPON_MODEL_REPO_ID`/`WEAPON_MODEL_FILENAME` at a different model
   to extend or replace coverage; no other code changes needed.
+- **Redis has no password and is published on the host**
+  (`docker-compose.yml`, port 6379, no `requirepass`). The code-execution
+  path this previously enabled (an unauthenticated pickle payload) is
+  fixed -- see "Security hardening" below -- but an unauthenticated Redis
+  is still readable/writable/flushable by anyone who can reach that port,
+  which affects the Celery broker/result backend and the live-tracker
+  state key alike. Add `requirepass` (and update `REDIS_URL`/
+  `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND` accordingly) before
+  exposing this stack beyond a trusted local network.
 
 ## Production hardening
 
@@ -834,14 +851,15 @@ just a demo:
   dwell-time or a configured zone.
 - **Live-camera tracker persistence** (`app/workers/tracking_pipeline.py`
   `save_live_tracking_state` / `load_live_tracking_state`): track IDs, risk
-  history, and narration state for a live-camera session are pickled to
-  Redis at the end of each `LIVE_SESSION_MAX_SECONDS` chunk and restored by
-  the next re-queued invocation, so a continuously-monitored camera keeps
-  one stable set of track IDs for the life of the session instead of
-  resetting every 300 seconds. Falls back to a fresh tracker if Redis is
-  unreachable or the saved state can't be loaded, rather than failing the
-  task; a TTL on the saved blob bounds how long stale state could ever
-  linger if cleanup is somehow skipped (e.g. a worker crash mid-session).
+  history, and narration state for a live-camera session are serialized as
+  plain JSON (not pickle -- see "Security hardening" below) to Redis at the
+  end of each `LIVE_SESSION_MAX_SECONDS` chunk and restored by the next
+  re-queued invocation, so a continuously-monitored camera keeps one
+  stable set of track IDs for the life of the session instead of resetting
+  every 300 seconds. Falls back to a fresh tracker if Redis is unreachable
+  or the saved state can't be loaded, rather than failing the task; a TTL
+  on the saved blob bounds how long stale state could ever linger if
+  cleanup is somehow skipped (e.g. a worker crash mid-session).
 - **Auth rate limiting** (`app/core/rate_limit.py`): `/api/auth/login` and
   `/api/auth/register` are rate-limited per client IP via a Redis-backed
   fixed-window counter (correct across multiple `UVICORN_WORKERS`
@@ -929,6 +947,66 @@ once more than one of either existed. Fixed by wiring the already-
 existing `camera_id` filter into `CameraDetail.tsx`, and adding a new
 `processing_job_id` filter (`app/routers/incidents.py`) for
 `VideoDetail.tsx`, since no equivalent existed for scoping by video/job.
+
+### Security hardening
+
+Three issues found and fixed by a dedicated security-review pass over
+this project's own code (not general advice -- each one was a concrete,
+verified bug in a specific file, fixed and re-tested against the live
+stack before being considered done):
+
+- **SSRF in camera stream URLs** (`app/services/camera_service.py`
+  `_validate_stream_url`): `POST /api/cameras/test-connection` and the
+  live-camera pipeline opened whatever URL was supplied via
+  `cv2.VideoCapture` with no validation at all -- any scheme, any host.
+  An authenticated admin/analyst could point it at an internal-only
+  target (`http://169.254.169.254/latest/meta-data/`, the cloud-metadata
+  address every major provider uses, or the server's own loopback) and
+  the `ok`/`width`/`height`/`fps` response would reveal what's reachable.
+  Fixed with a scheme allowlist (`rtsp(s)`, `http(s)`, `rtmp(s)`) and a
+  block on hostnames resolving to loopback or link-local addresses,
+  applied everywhere a URL is accepted or reused (create, update, test,
+  and again immediately before a live session actually connects).
+  Deliberately does **not** block private LAN ranges
+  (`192.168.x.x`/`10.x.x.x`): that's exactly where this product's real
+  home/office IP cameras live (see "Live cameras" above), so blocking all
+  private IPs would break the core use case, not just attacks. Verified
+  against the standard SSRF bypass toolkit (decimal/hex/octal IP
+  encoding, IPv4-mapped IPv6, case variation) with zero bypasses found,
+  alongside confirming real camera URLs still pass.
+- **Insecure deserialization in live-tracker Redis state**
+  (`app/workers/tracking_pipeline.py`): `load_live_tracking_state` used
+  to call `pickle.loads()` on whatever bytes were stored at
+  `sentinel:live_tracker_state:{job_id}` in Redis. Redis is published on
+  the host (`docker-compose.yml`, no `requirepass` configured -- see
+  "Known limitations"), so anyone reachable on that port could write a
+  malicious pickle payload to that key; the next time that job's session
+  re-queued (routine, every `LIVE_SESSION_MAX_SECONDS`), the worker would
+  deserialize and execute it. Replaced with explicit JSON
+  (de)serialization of only the known, simple fields each structure
+  actually has -- this doesn't just mitigate the issue, `json.loads()`
+  has no code-execution primitive at all, so the vulnerability class is
+  gone regardless of who else can write to that key. Verified with a
+  simulated malicious pickle payload that previously would have executed
+  code; it now fails safely with a decode error and falls back to a
+  fresh tracker.
+- **Unhandled 500 on NaN/Infinity input** (`app/main.py`,
+  `app/schemas/zone.py`): two distinct crash paths. Plain float fields
+  with no custom validator (`risk_threshold`, `minimum_dwell_seconds`)
+  silently accepted `Infinity`/`NaN` as "valid" (Python's `float`
+  supports them, and Pydantic doesn't reject them by default), which then
+  reached Postgres and only crashed later when the success response tried
+  to serialize it back (Starlette's `JSONResponse` enforces strict,
+  spec-compliant JSON) -- an unhandled 500 on a row that had *already
+  been persisted*. Fixed with `Field(allow_inf_nan=False)` so Pydantic
+  itself rejects it before the handler runs. Separately, a field with a
+  custom `@field_validator` (the zone polygon's `[0,1]` range check)
+  already rejected the bad value correctly, but Pydantic v2 wraps a
+  validator's raised `ValueError` as `ctx.error` holding the exception
+  *object*, which plain `json.dumps` can't encode -- reporting the
+  rejection crashed just as hard as accepting the bad value did
+  elsewhere. Fixed with a `RequestValidationError` handler that
+  recursively sanitizes the error payload before it's serialized.
 
 ## Future improvements
 
