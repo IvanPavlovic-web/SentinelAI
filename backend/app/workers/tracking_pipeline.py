@@ -12,7 +12,6 @@ tracked, and narrated identically. Only how detections arrive differs.
 from __future__ import annotations
 
 import json
-import pickle
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,7 +27,7 @@ from app.models.incident import Incident, IncidentEvidence, IncidentPriority
 from app.models.tracking import ActivityEvent, EventSeverity, ObjectObservation, TrackedObject
 from app.models.zone import Rule, Zone
 from app.services.alert_service import channels_summary, send_alert
-from app.workers.events import ActivityEventGenerator
+from app.workers.events import ActivityEventGenerator, _TrackState
 from app.workers.visual_attributes import frame_position_label, movement_label
 
 logger = get_logger(__name__)
@@ -74,16 +73,107 @@ def associate_weapons_to_people(
     return associations
 
 
+def _tracker_to_jsonable(tracker: CentroidIoUTracker) -> dict:
+    return {
+        "iou_threshold": tracker.iou_threshold,
+        "max_centroid_distance": tracker.max_centroid_distance,
+        "max_missed_frames": tracker.max_missed_frames,
+        "next_id": tracker._next_id,  # noqa: SLF001 - this module and tracker.py are the same subsystem
+        "tracks": {
+            str(track_id): {
+                "track_id": t.track_id,
+                "object_class": t.object_class,
+                "last_bbox": list(t.last_bbox),
+                "centroids": [list(c) for c in t.centroids],
+                "timestamps": t.timestamps,
+                "confidences": t.confidences,
+                "colors": t.colors,
+                "missed_frames": t.missed_frames,
+                "active": t.active,
+            }
+            for track_id, t in tracker._tracks.items()  # noqa: SLF001
+        },
+    }
+
+
+def _tracker_from_jsonable(data: dict) -> CentroidIoUTracker:
+    tracker = CentroidIoUTracker(
+        iou_threshold=data["iou_threshold"],
+        max_centroid_distance=data["max_centroid_distance"],
+        max_missed_frames=data["max_missed_frames"],
+    )
+    tracker._next_id = data["next_id"]  # noqa: SLF001
+    for track_id_str, t in data["tracks"].items():
+        tracker._tracks[int(track_id_str)] = Track(  # noqa: SLF001
+            track_id=t["track_id"],
+            object_class=t["object_class"],
+            last_bbox=tuple(t["last_bbox"]),
+            centroids=[tuple(c) for c in t["centroids"]],
+            timestamps=t["timestamps"],
+            confidences=t["confidences"],
+            colors=t["colors"],
+            missed_frames=t["missed_frames"],
+            active=t["active"],
+        )
+    return tracker
+
+
+def _state_to_jsonable(state: "TrackingState") -> dict:
+    return {
+        "track_db_ids": state.track_db_ids,
+        "first_seen_by_track": state.first_seen_by_track,
+        "risk_history_by_track": state.risk_history_by_track,
+        "track_rule_triggered": list(state.track_rule_triggered),
+        "incident_count": state.incident_count,
+        "event_track_states": {
+            str(track_id): {
+                "last_severity": s.last_severity,
+                "last_anomaly_flagged": s.last_anomaly_flagged,
+                "last_event_ts": s.last_event_ts,
+                "weapon_already_flagged": s.weapon_already_flagged,
+                "seen": s.seen,
+                "last_movement": s.last_movement,
+            }
+            for track_id, s in state.event_generator.track_states.items()
+        },
+    }
+
+
+def _state_from_jsonable(data: dict) -> "TrackingState":
+    state = TrackingState(
+        track_db_ids={int(k): v for k, v in data["track_db_ids"].items()},
+        first_seen_by_track={int(k): v for k, v in data["first_seen_by_track"].items()},
+        risk_history_by_track={int(k): v for k, v in data["risk_history_by_track"].items()},
+        track_rule_triggered=set(data["track_rule_triggered"]),
+        incident_count=data["incident_count"],
+    )
+    for track_id_str, s in data["event_track_states"].items():
+        state.event_generator.track_states[int(track_id_str)] = _TrackState(
+            last_severity=s["last_severity"],
+            last_anomaly_flagged=s["last_anomaly_flagged"],
+            last_event_ts=s["last_event_ts"],
+            weapon_already_flagged=s["weapon_already_flagged"],
+            seen=s["seen"],
+            last_movement=s["last_movement"],
+        )
+    return state
+
+
 def save_live_tracking_state(redis_client, job_id: int, tracker: CentroidIoUTracker, state: "TrackingState") -> None:
     """Persists tracker+state to Redis so a re-queued live-camera session
     (app/workers/tasks.py process_live_camera_task re-queues itself every
     LIVE_SESSION_MAX_SECONDS) picks up exactly where the previous
     invocation left off, instead of resetting every track ID and risk
-    history at that boundary. Best-effort: if this fails (Redis down,
-    something unpicklable snuck in), the session just falls back to a
-    fresh tracker on the next invocation rather than crashing the task."""
+    history at that boundary. Serialized as plain JSON of only the known,
+    simple fields (ints/floats/strings/lists/dicts) rather than pickle:
+    Redis holds this blob and is reachable well beyond this process (see
+    docker-compose.yml), so deserializing it must never be able to
+    execute arbitrary code regardless of who else can write to that key.
+    Best-effort: if this fails (Redis down), the session just falls back
+    to a fresh tracker on the next invocation rather than crashing the
+    task."""
     try:
-        blob = pickle.dumps({"tracker": tracker, "state": state})
+        blob = json.dumps({"tracker": _tracker_to_jsonable(tracker), "state": _state_to_jsonable(state)})
         redis_client.set(f"{LIVE_TRACKER_STATE_KEY_PREFIX}{job_id}", blob, ex=LIVE_TRACKER_STATE_TTL_SECONDS)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not persist live tracker state for job %s: %s", job_id, exc)
@@ -93,13 +183,15 @@ def load_live_tracking_state(redis_client, job_id: int) -> tuple[CentroidIoUTrac
     """Returns (tracker, state) saved by a previous invocation of the same
     live-camera session, or (None, None) if there is none / it couldn't be
     loaded -- the caller should then start a fresh tracker+state, same as
-    the very first invocation of a session."""
+    the very first invocation of a session. Malformed/unexpected JSON
+    (whether corrupted or written by something else entirely) is treated
+    the same as "no saved state", never evaluated or executed."""
     try:
         blob = redis_client.get(f"{LIVE_TRACKER_STATE_KEY_PREFIX}{job_id}")
         if not blob:
             return None, None
-        data = pickle.loads(blob)
-        return data["tracker"], data["state"]
+        data = json.loads(blob)
+        return _tracker_from_jsonable(data["tracker"]), _state_from_jsonable(data["state"])
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not load live tracker state for job %s: %s", job_id, exc)
         return None, None
